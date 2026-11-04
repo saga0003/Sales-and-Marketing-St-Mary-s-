@@ -114,6 +114,7 @@ function configFrom(options) {
           : ''),
     ),
     databaseUrl,
+    databaseSslCa: options.databaseSslCa ?? process.env.DATABASE_SSL_CA,
     databaseSchema: options.databaseSchema ?? process.env.DATABASE_SCHEMA ?? 'smis_marketing',
     migrate: asBoolean(options.migrate ?? process.env.AUTO_MIGRATE, !hosted),
     databasePath:
@@ -140,6 +141,7 @@ export async function createApp(options = {}) {
   const now = options.now ?? (() => new Date());
   const db = await openDatabase(config.databasePath, {
     databaseUrl: config.databaseUrl,
+    sslCa: config.databaseSslCa,
     schema: config.databaseSchema,
     migrate: config.migrate,
     onError: options.onError,

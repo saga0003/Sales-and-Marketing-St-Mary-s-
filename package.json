@@ -26,6 +26,9 @@
     "sharp": "0.35.5",
     "zod": "4.6.7"
   },
+  "overrides": {
+    "@vercel/cli-config": "0.3.6"
+  },
   "devDependencies": {
     "@types/node": "26.6.6",
     "@types/react": "19.3.0",

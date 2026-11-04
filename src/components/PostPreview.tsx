@@ -78,7 +78,9 @@ export default function PostPreview({
 
   const isManager = data.user.role === 'manager';
   const publicationLocked = data.publicationJobs.some(
-    (job) => job.postId === post.id && ['processing', 'needs_reconciliation'].includes(job.status),
+    (job) =>
+      job.postId === post.id &&
+      ['processing', 'needs_reconciliation', 'published'].includes(job.status),
   );
   const canEdit =
     !publicationLocked &&

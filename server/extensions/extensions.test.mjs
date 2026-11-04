@@ -609,6 +609,38 @@ test('editing approved content invalidates approval and cancels durable queue wi
   assert.equal(f.calls.published, 0);
 });
 
+test('a partially published multi-account post cannot be edited into a second send', async (t) => {
+  const f = await fixture(t);
+  const first = await f.connect();
+  f.fake.discover = async () => [
+    {
+      id: '102',
+      name: '@second_school',
+      kind: 'instagram',
+      platform: 'instagram',
+      pageId: '103',
+      pageAccessToken: 'SECOND_PAGE_TOKEN',
+    },
+  ];
+  const second = await f.connect();
+  const post = await f.approved(first, await f.asset(), { destinationIds: [first.id, second.id] });
+  const sent = await f.request('/api/jobs/run', { method: 'POST' });
+  assert.equal(sent.body.jobs[0].status, 'published');
+  const current = (await f.request(`/api/posts/${post.id}`)).body;
+  assert.equal(current.status, 'approved', 'The remaining destination is still queued.');
+  const edit = await f.request(`/api/posts/${post.id}`, {
+    method: 'PATCH',
+    body: { revision: 1, caption: 'Would cause a second publication' },
+  });
+  assert.equal(edit.status, 409);
+  assert.equal(edit.body.code, 'publication_already_sent');
+  assert.equal(f.calls.published, 1);
+  const rest = await f.request('/api/jobs/run', { method: 'POST' });
+  assert.equal(rest.body.jobs[0].status, 'published');
+  assert.equal(f.calls.published, 2);
+  assert.equal((await f.request(`/api/posts/${post.id}`)).body.status, 'published');
+});
+
 test('publish timeout parks for reconciliation and blocks retries, cancellation, edits and disconnect', async (t) => {
   const f = await fixture(t);
   const connection = await f.connect();
@@ -672,6 +704,49 @@ test('future schedule waits, processing container reuses its durable ID, and wor
   );
   assert.equal(f.calls.containers, 1);
   assert.equal(f.calls.published, 1);
+});
+
+test('a manager rescheduling between due lookup and claim prevents an early send', async (t) => {
+  const f = await fixture(t);
+  const post = await f.approved(await f.connect(), await f.asset());
+  const originalPrepare = f.db.prepare.bind(f.db);
+  let rescheduled = false;
+  f.db.prepare = (sql) => {
+    const statement = originalPrepare(sql);
+    if (!sql.includes("SELECT * FROM publication_jobs WHERE status = 'queued' AND scheduled_at <="))
+      return statement;
+    return {
+      ...statement,
+      get: async (...parameters) => {
+        const selected = await statement.get(...parameters);
+        if (selected && !rescheduled) {
+          rescheduled = true;
+          const response = await f.request(`/api/posts/${post.id}/transition`, {
+            method: 'POST',
+            body: { action: 'schedule', revision: 1, scheduledAt: '2026-11-05T10:00:00.000Z' },
+          });
+          assert.equal(response.status, 200, JSON.stringify(response.body));
+        }
+        return selected;
+      },
+    };
+  };
+  try {
+    const run = await f.request('/api/jobs/run', { method: 'POST' });
+    assert.equal(run.status, 200, JSON.stringify(run.body));
+    assert.equal(run.body.processed, 0);
+    assert.equal(f.calls.published, 0);
+    assert.equal(
+      (
+        await f.db
+          .prepare('SELECT scheduled_at FROM publication_jobs WHERE post_id = ?')
+          .get(post.id)
+      ).scheduled_at,
+      '2026-11-05T10:00:00.000Z',
+    );
+  } finally {
+    f.db.prepare = originalPrepare;
+  }
 });
 
 test('crashed publication after the send marker requires reconciliation, including secret-authenticated cron', async (t) => {

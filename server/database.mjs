@@ -98,12 +98,36 @@ export async function openDatabase(filename, options = {}) {
     throw new Error('DATABASE_SCHEMA must name an isolated application schema.');
   if (isPostgres) {
     const { Pool } = await import('pg');
+    let connectionString = databaseUrl;
+    let ssl = options.ssl;
+    if (options.sslCa) {
+      // pg's connection-string SSL settings take precedence over its ssl object.
+      // Use the explicitly trusted CA without weakening certificate/hostname checks.
+      const parsed = new URL(databaseUrl);
+      for (const name of [...parsed.searchParams.keys()]) {
+        if (
+          [
+            'ssl',
+            'sslmode',
+            'sslcert',
+            'sslkey',
+            'sslrootcert',
+            'sslpassword',
+            'uselibpqcompat',
+          ].includes(name.toLowerCase())
+        ) {
+          parsed.searchParams.delete(name);
+        }
+      }
+      connectionString = parsed.toString();
+      ssl = { ca: String(options.sslCa).replaceAll('\\n', '\n'), rejectUnauthorized: true };
+    }
     driver = new Pool({
-      connectionString: databaseUrl,
+      connectionString,
       max: options.poolSize ?? 3,
       connectionTimeoutMillis: 10000,
       idleTimeoutMillis: 15000,
-      ...(options.ssl ? { ssl: options.ssl } : {}),
+      ...(ssl ? { ssl } : {}),
     });
     driver.on('error', (error) => options.onError?.(error));
   } else {

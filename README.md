@@ -78,6 +78,7 @@ Use the transaction pooler’s prescribed username, host and port with verified 
 | Variable                                             | Purpose                                                                                                                                        |
 | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DATABASE_URL`                                       | Restricted PostgreSQL connection string; required on Vercel                                                                                    |
+| `DATABASE_SSL_CA`                                    | Optional trusted provider root CA in PEM format; TLS certificate and hostname verification stay enabled                                        |
 | `DATABASE_SCHEMA=smis_marketing`                     | Private application schema                                                                                                                     |
 | `AUTO_MIGRATE=true`                                  | Initial deployment/reviewed migration rollout only; switch to `false` and redeploy after success                                               |
 | `DEMO_MODE=false`, `EVALUATION_MODE=true`            | Authenticated evaluation, without sample seeding or login bypass                                                                               |

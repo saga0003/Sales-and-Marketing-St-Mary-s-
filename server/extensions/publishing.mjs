@@ -52,12 +52,19 @@ export function createPublishing({
   async function activeLock(postId) {
     return db
       .prepare(
-        "SELECT id, status FROM publication_jobs WHERE post_id = ? AND status IN ('processing','needs_reconciliation') LIMIT 1",
+        "SELECT id, status FROM publication_jobs WHERE post_id = ? AND status IN ('processing','needs_reconciliation','published') LIMIT 1",
       )
       .get(postId);
   }
   async function assertUnlocked(postId) {
-    if (postId && (await activeLock(postId)))
+    const blocked = postId ? await activeLock(postId) : null;
+    if (blocked?.status === 'published')
+      throw new HttpError(
+        409,
+        'This content has already been published to a destination. Duplicate the draft to change it, and manage any remaining deliveries in Publications.',
+        'publication_already_sent',
+      );
+    if (blocked)
       throw new HttpError(
         409,
         'A publication is running or needs reconciliation. Resolve that job before changing this post.',
@@ -338,13 +345,20 @@ export function createPublishing({
       const job = await db
         .prepare(`SELECT * FROM publication_jobs WHERE id = ?${db.lockSuffix}`)
         .get(next.id);
-      if (job?.status !== 'queued') return null;
+      if (job?.status !== 'queued' || Date.parse(job.scheduled_at) > now().getTime()) return null;
       const lease = opaqueId('lease');
-      await db
+      const claimed = await db
         .prepare(
-          "UPDATE publication_jobs SET status = 'processing', attempts = attempts + 1, lease_id = ?, lease_expires_at = ?, error = NULL, updated_at = ? WHERE id = ? AND status = 'queued'",
+          "UPDATE publication_jobs SET status = 'processing', attempts = attempts + 1, lease_id = ?, lease_expires_at = ?, error = NULL, updated_at = ? WHERE id = ? AND status = 'queued' AND scheduled_at <= ?",
         )
-        .run(lease, new Date(now().getTime() + 5 * 60 * 1000).toISOString(), stamp(), job.id);
+        .run(
+          lease,
+          new Date(now().getTime() + 5 * 60 * 1000).toISOString(),
+          stamp(),
+          job.id,
+          stamp(),
+        );
+      if (claimed.changes !== 1) return null;
       return { ...job, status: 'processing', lease_id: lease, attempts: Number(job.attempts) + 1 };
     });
   }

@@ -148,7 +148,7 @@ export default function PostComposer({ post, onClose }: { post?: Post; onClose: 
     (data.publicationJobs.some(
       (job) =>
         job.postId === currentPost.id &&
-        ['processing', 'needs_reconciliation'].includes(job.status),
+        ['processing', 'needs_reconciliation', 'published'].includes(job.status),
     ) ||
       currentPost.status === 'published' ||
       (data.user.role !== 'manager' &&
@@ -519,8 +519,11 @@ export default function PostComposer({ post, onClose }: { post?: Post; onClose: 
                     <CircleAlert size={18} />
                     <span>
                       This post is read only.{' '}
-                      {currentPost?.status === 'published'
-                        ? 'Published records cannot be edited.'
+                      {currentPost?.status === 'published' ||
+                      data.publicationJobs.some(
+                        (job) => job.postId === currentPost?.id && job.status === 'published',
+                      )
+                        ? 'This content has already been delivered to at least one account. Duplicate it to prepare a new post; remaining deliveries stay attached to this revision.'
                         : data.publicationJobs.some(
                               (job) =>
                                 job.postId === currentPost?.id &&
