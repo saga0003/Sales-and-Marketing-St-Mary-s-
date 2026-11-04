@@ -2,7 +2,9 @@
 
 ## Starting point
 
-The current release implements persistent content planning, revision-aware manager approval, manual research brief entry, source/competitor lists, tasks, shared text documents and an illustrative reporting interface. Production starts empty. No external publishing, monitoring, advertising, live analytics or AI service is connected.
+Version 0.2 adds shared PostgreSQL persistence, personal account setup/recovery, manager-controlled access, private image uploads, revision comments/history, Google Analytics 4 imports and an Instagram single-image publishing adapter. Vercel runs the UI/API and a bounded five-minute publishing worker; Supabase holds the private application schema and image bucket. Production starts empty. Google and Meta applications and school accounts must still be authorized before real reports or posts are possible. Advertising, automatic news/competitor monitoring, Search Console and AI services remain future work.
+
+The first two implementation slices are the shared team foundation and the initial GA4/Instagram connections. The numbered workstreams below describe the broader roadmap; they are not a claim that every original requirement is complete.
 
 The next stages should make one complete workflow useful at a time. Keep the portal as the place where people work and approve decisions; connect specialist services behind it rather than merging several repositories into one codebase.
 
@@ -12,7 +14,7 @@ The next stages should make one complete workflow useful at a time. Keep the por
 
 Use a separate production database behind HTTPS. Create real team accounts, confirm role boundaries, verify backups and test a full draft → review → requested changes → revised approval → local plan workflow with the people who will use it.
 
-Add the account lifecycle needed for regular use, especially password changes/recovery and manager-controlled account deactivation. Keep demonstration records out of the production database. Review the school’s actual institution names, publishing languages, content formats and responsibilities.
+Account setup/recovery, password changes, manager-controlled account deactivation, shared revision history and comments are implemented. Keep demonstration records out of the production database. Review the school’s actual institution names, publishing languages, content formats and responsibilities. A restore drill and an ordinary week of team use remain pilot exit checks.
 
 **Exit condition:** the team can use the workspace for a normal content week, a contributor cannot approve their own work, changed content requires fresh approval, and an isolated restore recovers the workspace.
 
@@ -82,7 +84,7 @@ Keep domain records and workflow decisions independent of provider-specific SDKs
 
 Persist job state, retries, idempotency keys and the last successful collection. Add monitoring of the workers themselves so a missing update is distinguishable from a failed job. OAuth scopes, token rotation and provider limits belong in each adapter's documentation.
 
-The existing SQLite store is suitable for the initial single-instance workflow. Reassess database/queue choices when collection volume, concurrent jobs or deployment topology require it. A move to PostgreSQL/Supabase should be driven by those requirements; the current repository does not include that migration or a Supabase connection.
+SQLite remains available for local development. The hosted application now requires PostgreSQL, uses transaction-scoped schema settings for pooled connections and persists publication jobs in that database. Images are stored separately in private object storage. The deployment must not use ephemeral Vercel files as its production database or media store. See the deployment instructions and provider adapter documentation before enabling additional accounts.
 
 ## Candidate repositories to evaluate
 

@@ -21,7 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { WorkspaceProvider, useWorkspace } from './lib/workspace';
-import type { Role, View } from './lib/types';
+import { institutions, type Role, type View } from './lib/types';
 import { Avatar, Badge, Button, Modal } from './components/UI';
 import PostComposer from './components/PostComposer';
 import Overview from './pages/Overview';
@@ -73,8 +73,18 @@ export default function App() {
 }
 
 function Shell() {
-  const { data, view, navigate, openComposer, composer, closeComposer, mutate, toast } =
-    useWorkspace();
+  const {
+    data,
+    view,
+    navigate,
+    openComposer,
+    composer,
+    closeComposer,
+    mutate,
+    toast,
+    selectedInstitution,
+    setInstitution,
+  } = useWorkspace();
   const [searchOpen, setSearchOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [menu, setMenu] = useState<'profile' | 'notifications' | null>(null);
@@ -337,15 +347,36 @@ function Shell() {
           <ChevronRight size={12} />
           <strong>{label}</strong>
         </div>
+        <label className="institution-switcher">
+          <span>School</span>
+          <select
+            aria-label="School workspace"
+            value={selectedInstitution}
+            onChange={(event) => setInstitution(event.target.value)}
+          >
+            <option value="all">All schools</option>
+            {institutions.map((institution) => (
+              <option key={institution}>{institution}</option>
+            ))}
+          </select>
+        </label>
         <div className="workspace-mode">
           <span className="workspace-mode-dot" />
           <span className="mode-description">
-            {data.demoMode ? 'Demo workspace' : 'Team workspace'}
+            {data.demoMode
+              ? 'Demo workspace'
+              : data.evaluationMode
+                ? 'Evaluation workspace'
+                : 'Team workspace'}
           </span>
           {data.demoMode ? (
             <button onClick={() => setHelpOpen(true)}>Sample data</button>
           ) : (
-            <button onClick={() => go('settings')}>Local planning</button>
+            <button onClick={() => go('settings')}>
+              {data.connections.some((connection) => connection.status === 'connected')
+                ? 'Manage connections'
+                : 'Set up connections'}
+            </button>
           )}
         </div>
       </div>
@@ -391,7 +422,7 @@ function Shell() {
               <h3>A clear approval step</h3>
               <p>
                 Managers review each revision. Changes clear the previous approval. Approved content
-                can join your local plan.
+                can be scheduled to a connected account, or kept in your planning calendar.
               </p>
             </div>
             <div className="help-item">
@@ -415,10 +446,11 @@ function Shell() {
             <Sparkles size={18} />
             <span>
               {data.demoMode
-                ? 'This is a demo workspace. Example posts, research opportunities, campaigns and charts are illustrative. Your edits are saved locally.'
+                ? 'This is a demo workspace. Example posts, research opportunities, campaigns and charts are illustrative.'
                 : 'Your team’s changes are saved in this workspace.'}{' '}
-              Social accounts are not connected yet. Planning a date does not publish a post, and
-              source bookmarks do not run automatic monitoring.
+              Connect an eligible account in Settings before scheduling a live publication. Planning
+              a date alone does not publish a post, and source bookmarks do not run automatic
+              monitoring.
             </span>
           </div>
           <div className="help-shortcuts">

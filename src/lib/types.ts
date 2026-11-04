@@ -10,6 +10,7 @@ export interface User {
   email: string;
   role: Role;
   initials: string;
+  active?: boolean;
 }
 export interface Post {
   id: string;
@@ -32,6 +33,8 @@ export interface Post {
   feedback?: string;
   sourceUrl?: string;
   mediaUrl?: string;
+  assetId?: string | null;
+  destinationIds?: string[];
   palette: 'violet' | 'navy' | 'sage' | 'peach';
   sample?: boolean;
 }
@@ -45,7 +48,13 @@ export type PostInput = Pick<
   | 'scheduledAt'
   | 'language'
   | 'palette'
-> & { sourceUrl?: string; mediaUrl?: string; revision?: number };
+> & {
+  sourceUrl?: string;
+  mediaUrl?: string;
+  assetId?: string | null;
+  destinationIds?: string[];
+  revision?: number;
+};
 export interface Opportunity {
   id: string;
   title: string;
@@ -137,7 +146,10 @@ export interface Analytics {
 export interface WorkspaceData {
   user: User;
   users: User[];
+  teamUsers?: User[];
   demoMode: boolean;
+  evaluationMode?: boolean;
+  storageMode?: string;
   csrfToken: string;
   posts: Post[];
   opportunities: Opportunity[];
@@ -149,6 +161,77 @@ export interface WorkspaceData {
   audit: AuditEntry[];
   analytics: Analytics;
   publishingEnabled: boolean;
+  providerSetup: ProviderSetup[];
+  connections: Connection[];
+  mediaAssets: MediaAsset[];
+  publicationJobs: PublicationJob[];
+  websiteAnalytics: WebsiteReport[];
+}
+export interface ProviderSetup {
+  id: 'google' | 'instagram';
+  name: string;
+  configured: boolean;
+  canConfigure: boolean;
+  redirectUri: string;
+  scopes: string[];
+  description: string;
+  requirements: string[];
+  error?: string;
+}
+export interface Connection {
+  id: string;
+  provider: 'google' | 'instagram';
+  accountId: string | null;
+  accountName: string;
+  institution: string;
+  status: 'awaiting_selection' | 'connected' | 'needs_attention' | 'disconnected';
+  capabilities: string[];
+  connectedBy: string;
+  createdAt: string;
+  lastTestAt: string | null;
+  lastSyncAt: string | null;
+  error: string | null;
+}
+export interface MediaAsset {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  sha256: string;
+  width: number;
+  height: number;
+  url: string;
+  ownerId: string;
+  createdAt: string;
+}
+export interface PublicationJob {
+  id: string;
+  postId: string;
+  revision: number;
+  connectionId: string;
+  accountName: string;
+  platform: 'instagram';
+  status: 'queued' | 'processing' | 'published' | 'failed' | 'needs_reconciliation' | 'cancelled';
+  scheduledAt: string;
+  attempts: number;
+  error: string | null;
+  remoteId: string | null;
+  remoteUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface WebsiteReport {
+  connectionId: string;
+  accountName: string;
+  institution: string;
+  provider: 'ga4';
+  startDate: string;
+  endDate: string;
+  importedAt: string;
+  totals: { users: number; sessions: number; views: number; keyEvents: number };
+  daily: { date: string; users: number; sessions: number; views: number; keyEvents: number }[];
+  pages: { path: string; sessions: number; views: number; keyEvents: number }[];
+  sources: { source: string; sessions: number; keyEvents: number }[];
 }
 export const institutions = [
   'St. Mary’s ISC',

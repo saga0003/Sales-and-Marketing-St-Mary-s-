@@ -44,6 +44,15 @@ const postFields = {
   palette: z.enum(['violet', 'navy', 'sage', 'peach']),
   sourceUrl: optionalUrl,
   mediaUrl: optionalUrl,
+  assetId: z.string().trim().min(1).max(200).nullable().optional(),
+  destinationIds: z
+    .array(z.string().trim().min(1).max(200))
+    .max(5)
+    .refine(
+      (values) => new Set(values).size === values.length,
+      'Choose each destination only once.',
+    )
+    .optional(),
 };
 
 export const postCreateSchema = z.object(postFields).strict();
@@ -83,7 +92,7 @@ export const userCreateSchema = z
       .max(254)
       .transform((value) => value.toLowerCase()),
     role,
-    password: z.string().min(12, 'Use at least 12 characters.').max(256),
+    password: z.string().min(12, 'Use at least 12 characters.').max(256).optional(),
   })
   .strict();
 

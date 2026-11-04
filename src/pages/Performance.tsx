@@ -26,11 +26,12 @@ import {
   platformNames,
 } from '../components/UI';
 import { TrendChart } from '../components/Charts';
+import WebsiteAnalytics from '../components/WebsiteAnalytics';
 import { downloadCsv, errorMessage, formatCurrency, formatDate, formatNumber } from '../lib/utils';
 
 export default function Performance() {
   const { data, navigate, mutate, toast } = useWorkspace();
-  const [tab, setTab] = useState<'overview' | 'campaigns' | 'search'>('overview');
+  const [tab, setTab] = useState<'website' | 'overview' | 'campaigns' | 'search'>('website');
   const [period, setPeriod] = useState(30);
   const [metric, setMetric] = useState<'reach' | 'engagement' | 'enquiries'>('reach');
   const [showData, setShowData] = useState(false);
@@ -111,10 +112,12 @@ export default function Performance() {
               <Link2 size={15} />
               Data sources
             </Button>
-            <Button variant="primary" onClick={exportData}>
-              <ArrowDownToLine size={15} />
-              Export report
-            </Button>
+            {tab !== 'website' && (
+              <Button variant="primary" onClick={exportData}>
+                <ArrowDownToLine size={15} />
+                Export report
+              </Button>
+            )}
           </>
         }
       />
@@ -122,6 +125,7 @@ export default function Performance() {
         <div className="tabs" role="tablist" aria-label="Performance section">
           {(
             [
+              { id: 'website', label: 'Website analytics' },
               { id: 'overview', label: 'Channel overview' },
               { id: 'campaigns', label: 'Ad campaigns' },
               { id: 'search', label: 'SEO & AI visibility' },
@@ -150,7 +154,7 @@ export default function Performance() {
           </select>
         )}
       </div>
-      {data.analytics.sample && tab !== 'search' && (
+      {data.analytics.sample && tab !== 'search' && tab !== 'website' && (
         <div className="perf-sample-note">
           <Sparkles size={14} />
           <p>
@@ -163,6 +167,7 @@ export default function Performance() {
           </button>
         </div>
       )}
+      {tab === 'website' && <WebsiteAnalytics />}
       {tab === 'overview' && (
         <>
           <div className="perf-stats">
@@ -193,7 +198,7 @@ export default function Performance() {
             <Stat
               label="Connected sources"
               value={String(
-                data.integrations.filter((i) => i.status === 'configured').length,
+                data.connections.filter((i) => i.status === 'connected').length,
               ).padStart(2, '0')}
               icon={<Link2 size={18} />}
               note="Account connections are required"

@@ -328,3 +328,35 @@ databases. It verifies:
 - Preserved source provenance and duplicate-safe opportunity-to-draft conversion.
 - URL/date validation and partial workspace updates.
 - Database/session/audit persistence without re-seeding on restart.
+
+# Version 0.2 additions
+
+The authenticated bootstrap response now includes `teamUsers` (manager only), `providerSetup`, `connections`, `mediaAssets`, `publicationJobs`, `websiteAnalytics`, `evaluationMode` and `storageMode`. Provider application secrets and account tokens never appear in these responses.
+
+| Endpoint                                   | Purpose                                                                            |
+| ------------------------------------------ | ---------------------------------------------------------------------------------- |
+| `POST /api/auth/setup`                     | Redeem a personal, expiring, single-use setup/recovery token and choose a password |
+| `POST /api/auth/password`                  | Change password after verifying the current password; rotate sessions              |
+| `PATCH /api/users/:id`                     | Manager-controlled name, role and active status                                    |
+| `POST /api/users/:id/setup-link`           | Issue a replacement setup/recovery link; does not send email                       |
+| `GET/POST /api/posts/:id/comments`         | Read or add revision-linked review discussion                                      |
+| `GET /api/posts/:id/history`               | Saved revision snapshots and changes                                               |
+| `POST /api/posts/:id/duplicate`            | Create a new unapproved draft                                                      |
+| `GET /api/connections`                     | Provider setup requirements and authorized account states                          |
+| `PUT /api/connections/providers/:provider` | Encrypt manager-provided Google or Meta application credentials                    |
+| `POST /api/connections/authorize`          | Start session-bound OAuth authorization                                            |
+| `GET /api/connections/:id/accounts`        | Discover accessible GA4 properties or eligible Instagram accounts                  |
+| `POST /api/connections/:id/select`         | Map the exact account/property to its institution                                  |
+| `POST /api/connections/:id/test`           | Check provider access without publishing                                           |
+| `POST /api/connections/:id/sync`           | Import GA4 reports for an explicit date range                                      |
+| `DELETE /api/connections/:id`              | Disconnect an account, subject to in-flight publication safeguards                 |
+| `GET/POST /api/media`                      | List authorized media or upload raw image bytes, at most 3 MiB                     |
+| `GET /api/media/:id/content`               | Authenticated private image retrieval                                              |
+| `POST /api/posts/:id/publications`         | Ensure durable jobs for the exact approved revision and destinations               |
+| `POST /api/publications/:id/retry`         | Retry an eligible, unambiguous failure/cancellation                                |
+| `POST /api/publications/:id/cancel`        | Cancel a job that has not been sent                                                |
+| `POST /api/publications/:id/reconcile`     | Verify a remotely published media ID after an ambiguous send                       |
+| `POST /api/jobs/run`                       | Manager-triggered processing of one due job                                        |
+| `GET /api/jobs/run`                        | Same bounded worker, authenticated by the server-only cron secret                  |
+
+Manager approval automatically creates jobs when an approved revision has real publishing destinations. A local content plan without a destination does not send anything. Content edits revoke approval and cancel eligible pending jobs. The server prevents edits during an active or ambiguous send. See [the provider contract](../server/extensions/FRONTEND-CONTRACT.md) for exact payloads and [adapter operations](../server/extensions/README.md) for prerequisites and failure handling.

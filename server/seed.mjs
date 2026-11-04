@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { hashPasswordSync } from './auth.mjs';
+import { hashPasswordSync, hashToken } from './auth.mjs';
 import {
   audit,
   getPost,
@@ -10,96 +10,115 @@ import {
   writePostRevision,
 } from './database.mjs';
 import { userCreateSchema } from './validation.mjs';
-
 export const DEMO_MANAGER_ID = 'manager_demo';
 export const DEMO_CONTRIBUTOR_ID = 'contributor_demo';
-
-export function initializeWorkspace(db, config, now) {
-  const existingMode = db
-    .prepare("SELECT value FROM workspace_metadata WHERE key = 'mode'")
-    .get()?.value;
-  const requestedMode = config.demoMode ? 'demo' : 'production';
-  if (existingMode && existingMode !== requestedMode) {
-    throw new Error(
-      `This database belongs to a ${existingMode} workspace. Use a separate DATABASE_PATH for ${requestedMode}; demo data must never be promoted to production.`,
-    );
-  }
-  if (existingMode) {
-    const manager = db
-      .prepare("SELECT id FROM users WHERE role = 'manager' AND active = 1 LIMIT 1")
-      .get();
-    if (!manager)
+export async function initializeWorkspace(db, config, now) {
+  return transaction(db, async () => {
+    if (db.kind === 'postgres') {
+      await db
+        .prepare('SELECT pg_advisory_xact_lock(hashtext(?))')
+        .get(`smis:${db.schema}:initialize`);
+    }
+    const existingMode = (
+      await db.prepare("SELECT value FROM workspace_metadata WHERE key = 'mode'").get()
+    )?.value;
+    const requestedMode = config.demoMode ? 'demo' : 'production';
+    if (existingMode && existingMode !== requestedMode) {
       throw new Error(
-        'Workspace has no active manager. Restore a valid database backup instead of silently resetting credentials.',
+        `This database belongs to a ${existingMode} workspace. Use a separate DATABASE_PATH for ${requestedMode}; demo data must never be promoted to production.`,
       );
-    return;
-  }
-
-  const count = [
-    'users',
-    'posts',
-    'competitors',
-    'sources',
-    'tasks',
-    'documents',
-    'opportunities',
-  ].reduce(
-    (sum, table) => sum + db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count,
-    0,
-  );
-  if (count > 0)
-    throw new Error(
-      'Database contains data but has no workspace mode marker. Review the migration before starting.',
-    );
-
-  const timestamp = now.toISOString();
-  if (config.demoMode) {
-    transaction(db, () => {
-      db.prepare('INSERT INTO workspace_metadata(key, value) VALUES (?, ?)').run('mode', 'demo');
-      seedDemo(db, now);
+    }
+    if (existingMode) {
+      const manager = await db
+        .prepare("SELECT id FROM users WHERE role = 'manager' AND active = 1 LIMIT 1")
+        .get();
+      if (!manager)
+        throw new Error(
+          'Workspace has no active manager. Restore a valid database backup instead of silently resetting credentials.',
+        );
+      return;
+    }
+    let count = 0;
+    for (const table of [
+      'users',
+      'posts',
+      'competitors',
+      'sources',
+      'tasks',
+      'documents',
+      'opportunities',
+    ])
+      count += Number((await db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).count);
+    if (count > 0)
+      throw new Error(
+        'Database contains data but has no workspace mode marker. Review the migration before starting.',
+      );
+    const timestamp = now.toISOString();
+    if (config.demoMode) {
+      await transaction(db, async () => {
+        await db
+          .prepare('INSERT INTO workspace_metadata(key, value) VALUES (?, ?)')
+          .run('mode', 'demo');
+        await seedDemo(db, now);
+      });
+      return;
+    }
+    // Bootstrap and normal account creation must use the same validation. A more
+    // permissive bootstrap email check could create an account rejected at login.
+    const account = userCreateSchema.safeParse({
+      name:
+        String(config.adminName || 'Workspace manager')
+          .trim()
+          .slice(0, 180) || 'Workspace manager',
+      email: String(config.adminEmail ?? '').trim(),
+      password: config.adminPassword || undefined,
+      role: 'manager',
     });
-    return;
-  }
-
-  // Bootstrap and normal account creation must use the same validation. A more
-  // permissive bootstrap email check could create an account rejected at login.
-  const account = userCreateSchema.safeParse({
-    name:
-      String(config.adminName || 'Workspace manager')
-        .trim()
-        .slice(0, 180) || 'Workspace manager',
-    email: String(config.adminEmail ?? '').trim(),
-    password: config.adminPassword,
-    role: 'manager',
-  });
-  if (!account.success) {
-    throw new Error(
-      'A new production workspace requires BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD (12–256 characters). There are no default production credentials.',
-    );
-  }
-  const { name, email, password } = account.data;
-  const passwordHash = hashPasswordSync(password);
-  transaction(db, () => {
-    db.prepare('INSERT INTO workspace_metadata(key, value) VALUES (?, ?)').run(
-      'mode',
-      'production',
-    );
-    db.prepare(
-      `INSERT INTO users(id, name, email, role, password_hash, created_at, updated_at)
-      VALUES (?, ?, ?, 'manager', ?, ?, ?)`,
-    ).run('manager_initial', name, email, passwordHash, timestamp, timestamp);
-    audit(
-      db,
-      null,
-      'Workspace initialized',
-      'workspace',
-      'Production workspace created. No providers are connected; publishing is disabled.',
-      timestamp,
-    );
+    const setupToken = config.adminSetupToken;
+    const validSetupToken =
+      typeof setupToken === 'string' && /^[A-Za-z0-9_-]{43,128}$/.test(setupToken);
+    if (!account.success || (!account.data.password && !validSetupToken)) {
+      throw new Error(
+        'A new production workspace requires BOOTSTRAP_ADMIN_EMAIL and either BOOTSTRAP_ADMIN_PASSWORD (12–256 characters) or a strong BOOTSTRAP_SETUP_TOKEN. There are no default production credentials.',
+      );
+    }
+    const { name, email, password } = account.data;
+    const passwordHash = hashPasswordSync(password ?? randomBytes(48).toString('base64url'));
+    await transaction(db, async () => {
+      await db
+        .prepare('INSERT INTO workspace_metadata(key, value) VALUES (?, ?)')
+        .run('mode', 'production');
+      await db
+        .prepare(
+          `INSERT INTO users(id, name, email, role, password_hash, created_at, updated_at, setup_pending)
+      VALUES (?, ?, ?, 'manager', ?, ?, ?, ?)`,
+        )
+        .run('manager_initial', name, email, passwordHash, timestamp, timestamp, Number(!password));
+      if (validSetupToken) {
+        await db
+          .prepare(
+            `INSERT INTO account_setup_tokens(token_hash, user_id, purpose, created_by, created_at, expires_at)
+            VALUES (?, ?, 'setup', NULL, ?, ?)`,
+          )
+          .run(
+            hashToken(setupToken),
+            'manager_initial',
+            timestamp,
+            now.getTime() + 24 * 60 * 60 * 1000,
+          );
+      }
+      await audit(
+        db,
+        null,
+        'Workspace initialized',
+        'workspace',
+        'Production workspace created. No providers are connected; publishing is disabled.',
+        timestamp,
+      );
+    });
   });
 }
-
-function seedDemo(db, now) {
+async function seedDemo(db, now) {
   const timestamp = now.toISOString();
   const shift = (hours) => new Date(now.getTime() + hours * 3600000).toISOString();
   const day = (offset) => new Date(now.getTime() + offset * 86400000).toISOString().slice(0, 10);
@@ -115,12 +134,13 @@ function seedDemo(db, now) {
       role: 'contributor',
     },
   ]) {
-    db.prepare(
-      'INSERT INTO users(id, name, email, role, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    ).run(person.id, person.name, person.email, person.role, passwordHash, timestamp, timestamp);
+    await db
+      .prepare(
+        'INSERT INTO users(id, name, email, role, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(person.id, person.name, person.email, person.role, passwordHash, timestamp, timestamp);
   }
-  const manager = toUser(db.prepare('SELECT * FROM users WHERE id = ?').get(DEMO_MANAGER_ID));
-
+  const manager = toUser(await db.prepare('SELECT * FROM users WHERE id = ?').get(DEMO_MANAGER_ID));
   const posts = [
     {
       title: 'Your next attempt. A clearer plan.',
@@ -230,10 +250,9 @@ function seedDemo(db, now) {
       approvedBy: approved ? DEMO_MANAGER_ID : null,
       approvedAt: approved ? shift(-1 - index) : null,
     };
-    insertPost(db, post);
-    writePostRevision(db, getPost(db, post.id), post.ownerId, post.createdAt);
+    await insertPost(db, post);
+    await writePostRevision(db, await getPost(db, post.id), post.ownerId, post.createdAt);
   }
-
   const opportunities = [
     {
       title: 'Turn an exam notice into a parent checklist',
@@ -295,27 +314,28 @@ function seedDemo(db, now) {
     },
   ];
   for (const [index, item] of opportunities.entries()) {
-    db.prepare(
-      `INSERT INTO opportunities(id, title, summary, source, source_url, category, published_at,
+    await db
+      .prepare(
+        `INSERT INTO opportunities(id, title, summary, source, source_url, category, published_at,
       verified, status, priority, audience, content_angle, source_kind, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'sample', ?, ?)`,
-    ).run(
-      `demo_opportunity_${index + 1}`,
-      item.title,
-      item.summary,
-      item.source,
-      item.sourceUrl,
-      item.category,
-      shift(-4 - index * 3),
-      index === 4 ? 'saved' : 'new',
-      item.priority,
-      item.audience,
-      item.contentAngle,
-      timestamp,
-      timestamp,
-    );
+      )
+      .run(
+        `demo_opportunity_${index + 1}`,
+        item.title,
+        item.summary,
+        item.source,
+        item.sourceUrl,
+        item.category,
+        shift(-4 - index * 3),
+        index === 4 ? 'saved' : 'new',
+        item.priority,
+        item.audience,
+        item.contentAngle,
+        timestamp,
+        timestamp,
+      );
   }
-
   for (const [index, values] of [
     {
       name: 'Example Academy',
@@ -343,16 +363,15 @@ function seedDemo(db, now) {
       monitoringStatus: 'paused',
     },
   ].entries()) {
-    const item = insertResource(
+    const item = await insertResource(
       db,
       'competitors',
       values,
       timestamp,
       `demo_competitor_${index + 1}`,
     );
-    db.prepare('UPDATE competitors SET sample = 1 WHERE id = ?').run(item.id);
+    await db.prepare('UPDATE competitors SET sample = 1 WHERE id = ?').run(item.id);
   }
-
   for (const [index, values] of [
     {
       name: 'National Testing Agency',
@@ -373,14 +392,13 @@ function seedDemo(db, now) {
     { name: 'CISCE', url: 'https://cisce.org/', category: 'Board updates' },
     { name: 'CBSE', url: 'https://www.cbse.gov.in/', category: 'Board updates' },
   ].entries())
-    insertResource(
+    await insertResource(
       db,
       'sources',
       { ...values, status: 'manual' },
       timestamp,
       `demo_source_${index + 1}`,
     );
-
   for (const [index, values] of [
     {
       title: 'Demo · Review the Grade 11 carousel',
@@ -411,8 +429,7 @@ function seedDemo(db, now) {
       priority: 'low',
     },
   ].entries())
-    insertResource(db, 'tasks', values, timestamp, `demo_task_${index + 1}`);
-
+    await insertResource(db, 'tasks', values, timestamp, `demo_task_${index + 1}`);
   for (const [index, values] of [
     {
       title: 'Brand voice & content principles',
@@ -433,8 +450,7 @@ function seedDemo(db, now) {
         '# Weekly review\n\nIllustrative agenda. Analytics in this demo are sample values. No accounts are connected.\n\n1. Review parent enquiries and visit outcomes.\n2. Review submitted drafts and feedback.\n3. Check primary sources for useful exam updates.\n4. Choose the coming week’s priorities.\n5. Confirm owners and deadlines.\n\nLocal scheduling in this release does not publish to any platform.',
     },
   ].entries())
-    insertResource(db, 'documents', values, shift(-index), `demo_document_${index + 1}`);
-
+    await insertResource(db, 'documents', values, shift(-index), `demo_document_${index + 1}`);
   const reach = [
     2180, 2640, 2330, 3190, 2940, 3650, 3280, 4110, 3820, 4380, 4050, 5120, 4740, 5480,
   ];
@@ -488,10 +504,10 @@ function seedDemo(db, now) {
       { platform: 'linkedin', followers: 720, reach: 3240, engagement: 133 },
     ],
   };
-  db.prepare('INSERT INTO analytics_samples(id, data) VALUES (1, ?)').run(
-    JSON.stringify(analytics),
-  );
-  audit(
+  await db
+    .prepare('INSERT INTO analytics_samples(id, data) VALUES (1, ?)')
+    .run(JSON.stringify(analytics));
+  await audit(
     db,
     manager,
     'Demo workspace initialized',

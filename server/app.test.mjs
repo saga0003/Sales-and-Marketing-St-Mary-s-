@@ -4,10 +4,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createApp } from './app.mjs';
+import { newToken, hashToken } from './auth.mjs';
 
 async function fixture(t, overrides = {}) {
-  const app = createApp({
+  const app = await createApp({
     demoMode: true,
+    extensions: false,
+    databaseUrl: '',
     databasePath: ':memory:',
     secureCookies: false,
     serveStatic: false,
@@ -24,7 +27,7 @@ async function fixture(t, overrides = {}) {
     await new Promise((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
     );
-    app.locals.close();
+    await app.locals.close();
   };
   t.after(close);
   return { app, close, url: `http://127.0.0.1:${server.address().port}` };
@@ -120,12 +123,12 @@ test('demo bootstrap is honest about sample data and creates a protected session
 });
 
 test('production has no default login, has empty analytics, and persists no plaintext password', async (t) => {
-  assert.throws(
+  await assert.rejects(
     () =>
       createApp({ demoMode: false, databasePath: ':memory:', adminEmail: '', adminPassword: '' }),
     /BOOTSTRAP_ADMIN/,
   );
-  assert.throws(
+  await assert.rejects(
     () =>
       createApp({
         demoMode: false,
@@ -161,7 +164,8 @@ test('production has no default login, has empty analytics, and persists no plai
   assert.equal(data.posts.length, 0);
   assert.equal(data.opportunities.length, 0);
   assert.deepEqual(data.analytics, { sample: false, points: [], campaigns: [], channels: [] });
-  const stored = app.locals.database.prepare('SELECT password_hash FROM users').get().password_hash;
+  const stored = (await app.locals.database.prepare('SELECT password_hash FROM users').get())
+    .password_hash;
   assert.match(stored, /^scrypt\$16384\$8\$1\$/);
   assert.ok(!stored.includes(password));
   const switchRole = await client.request('/api/auth/demo-role', {
@@ -341,7 +345,7 @@ test('approval is bound to the content revision; edits revoke it and stale reque
     ).status,
     422,
   );
-  const versions = app.locals.database
+  const versions = await app.locals.database
     .prepare('SELECT revision, snapshot FROM post_revisions WHERE post_id = ? ORDER BY revision')
     .all(post.id);
   assert.deepEqual(
@@ -711,7 +715,7 @@ test('SQLite persists edits, sessions and audit history across restarts without 
     data.audit.some((item) => item.entityId === created.id && item.action === 'Draft edited'),
   );
   await second.close();
-  assert.throws(
+  await assert.rejects(
     () =>
       createApp({
         demoMode: false,
@@ -797,6 +801,366 @@ test('successful logins do not exhaust a shared IP failure budget while bad pass
       email: 'admin@example.test',
       password: 'incorrect password',
     },
+  });
+  assert.equal(limited.status, 429);
+  assert.ok(Number(limited.headers.get('retry-after')) > 0);
+});
+
+test('a production setup token creates a private session once and is never exposed in public configuration', async (t) => {
+  const token = newToken();
+  const { app, url } = await fixture(t, {
+    demoMode: false,
+    evaluationMode: true,
+    adminEmail: 'owner@example.test',
+    adminPassword: '',
+    adminSetupToken: token,
+  });
+  const client = new Client(url);
+  const config = await client.request('/api/config');
+  assert.equal(config.status, 200);
+  assert.equal(config.body.evaluationMode, true);
+  assert.equal(config.body.demoMode, false);
+  assert.equal(config.body.selfRegistration, false);
+  assert.ok(!JSON.stringify(config.body).includes(token));
+  assert.ok(!JSON.stringify(config.body).includes('owner@example.test'));
+  assert.equal((await client.request('/api/bootstrap')).status, 401);
+  const password = 'My chosen private manager password';
+  const setup = await client.request('/api/auth/setup', {
+    method: 'POST',
+    body: { token, password },
+  });
+  assert.equal(setup.status, 200, JSON.stringify(setup.body));
+  assert.equal(setup.body.user.role, 'manager');
+  assert.equal(setup.body.user.setupPending, false);
+  assert.equal((await client.bootstrap()).posts.length, 0);
+  const stored = await app.locals.database.prepare('SELECT * FROM account_setup_tokens').get();
+  assert.equal(stored.token_hash, hashToken(token));
+  assert.ok(stored.consumed_at);
+  assert.ok(!JSON.stringify(stored).includes(token));
+  const replay = await new Client(url).request('/api/auth/setup', {
+    method: 'POST',
+    body: { token, password: 'A different long private password' },
+  });
+  assert.equal(replay.status, 400);
+  assert.equal(replay.body.code, 'invalid_setup_token');
+  const signedIn = await new Client(url).request('/api/auth/login', {
+    method: 'POST',
+    body: { email: 'owner@example.test', password },
+  });
+  assert.equal(signedIn.status, 200);
+});
+
+test('team links expire and rotate; deactivation revokes sessions and links; password changes revoke older sessions', async (t) => {
+  let clock = new Date('2026-11-04T10:00:00.000Z');
+  const { url } = await fixture(t, {
+    demoMode: false,
+    adminEmail: 'manager@example.test',
+    adminPassword: 'A very long manager password',
+    now: () => clock,
+  });
+  const manager = new Client(url);
+  const loginManager = () =>
+    manager.request('/api/auth/login', {
+      method: 'POST',
+      body: { email: 'manager@example.test', password: 'A very long manager password' },
+    });
+  assert.equal((await loginManager()).status, 200);
+  const created = await manager.request('/api/users', {
+    method: 'POST',
+    body: { name: 'New editor', email: 'editor@example.test', role: 'contributor' },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.body.setupPending, true);
+  const editorId = created.body.id;
+  const getToken = (value) => new URLSearchParams(new URL(value).hash.split('?')[1]).get('token');
+  const originalToken = getToken(created.body.setupUrl);
+  assert.equal(created.body.setupExpiresAt, '2026-11-05T10:00:00.000Z');
+  assert.ok(!(await manager.bootstrap()).teamUsers.some((user) => 'setupUrl' in user));
+  clock = new Date('2026-11-05T10:00:01.000Z');
+  const editor = new Client(url);
+  assert.equal(
+    (
+      await editor.request('/api/auth/setup', {
+        method: 'POST',
+        body: { token: originalToken, password: 'The editor chooses a password' },
+      })
+    ).status,
+    400,
+  );
+  await loginManager();
+  const replacement = await manager.request(`/api/users/${editorId}/setup-link`, {
+    method: 'POST',
+    body: { purpose: 'setup' },
+  });
+  assert.equal(replacement.status, 201);
+  const token = getToken(replacement.body.setupUrl);
+  assert.notEqual(token, originalToken);
+  assert.equal(
+    (
+      await editor.request('/api/auth/setup', {
+        method: 'POST',
+        body: { token, password: 'The editor chooses a password' },
+      })
+    ).status,
+    200,
+  );
+  const secondSession = new Client(url);
+  assert.equal(
+    (
+      await secondSession.request('/api/auth/login', {
+        method: 'POST',
+        body: { email: 'editor@example.test', password: 'The editor chooses a password' },
+      })
+    ).status,
+    200,
+  );
+  const oldCookie = editor.cookie;
+  const changed = await editor.request('/api/auth/password', {
+    method: 'POST',
+    body: {
+      currentPassword: 'The editor chooses a password',
+      password: 'A replacement editor password',
+    },
+  });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  assert.notEqual(editor.cookie, oldCookie);
+  assert.equal((await secondSession.request('/api/bootstrap')).status, 401);
+  const recovery = await manager.request(`/api/users/${editorId}/setup-link`, {
+    method: 'POST',
+    body: { purpose: 'recovery' },
+  });
+  const deactivated = await manager.request(`/api/users/${editorId}`, {
+    method: 'PATCH',
+    body: { active: false },
+  });
+  assert.equal(deactivated.status, 200);
+  assert.equal(deactivated.body.active, false);
+  assert.equal((await editor.request('/api/bootstrap')).status, 401);
+  assert.equal(
+    (
+      await editor.request('/api/auth/login', {
+        method: 'POST',
+        body: { email: 'editor@example.test', password: 'A replacement editor password' },
+      })
+    ).status,
+    401,
+  );
+  assert.equal(
+    (
+      await manager.request(`/api/users/${editorId}/setup-link`, {
+        method: 'POST',
+        body: { purpose: 'recovery' },
+      })
+    ).status,
+    409,
+  );
+  assert.equal(
+    (await manager.request(`/api/users/${editorId}`, { method: 'PATCH', body: { active: true } }))
+      .status,
+    200,
+  );
+  assert.equal(
+    (
+      await editor.request('/api/auth/setup', {
+        method: 'POST',
+        body: {
+          token: getToken(recovery.body.setupUrl),
+          password: 'Cannot reuse a revoked recovery link',
+        },
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await editor.request('/api/auth/login', {
+        method: 'POST',
+        body: { email: 'editor@example.test', password: 'A replacement editor password' },
+      })
+    ).status,
+    200,
+  );
+  assert.equal((await editor.request('/api/team')).status, 403);
+  assert.equal(
+    (
+      await editor.request(`/api/users/${editorId}/setup-link`, {
+        method: 'POST',
+        body: { purpose: 'recovery' },
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await editor.request('/api/users/manager_initial', {
+        method: 'PATCH',
+        body: { active: false },
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await manager.request('/api/users/manager_initial', {
+        method: 'PATCH',
+        body: { active: false },
+      })
+    ).status,
+    409,
+  );
+  assert.equal(
+    (
+      await manager.request('/api/users/manager_initial', {
+        method: 'PATCH',
+        body: { role: 'contributor' },
+      })
+    ).status,
+    409,
+  );
+  assert.equal((await manager.request('/api/team')).body.length, 2);
+});
+
+test('concurrent edits cannot overwrite a revision, and collaboration retains media and destination snapshots', async (t) => {
+  const { url } = await fixture(t);
+  const manager = new Client(url);
+  await manager.bootstrap();
+  const post = await createDraft(manager, {
+    assetId: 'asset_one',
+    destinationIds: ['destination_one'],
+  });
+  const comment = await manager.request(`/api/posts/${post.id}/comments`, {
+    method: 'POST',
+    body: { revision: 1, body: 'Please verify the admission dates.' },
+  });
+  assert.equal(comment.status, 201);
+  const edits = await Promise.all([
+    manager.request(`/api/posts/${post.id}`, {
+      method: 'PATCH',
+      body: {
+        revision: 1,
+        caption: 'First proposed caption',
+        assetId: 'asset_two',
+        destinationIds: ['destination_two'],
+      },
+    }),
+    manager.request(`/api/posts/${post.id}`, {
+      method: 'PATCH',
+      body: {
+        revision: 1,
+        caption: 'Second proposed caption',
+        assetId: 'asset_three',
+        destinationIds: ['destination_three'],
+      },
+    }),
+  ]);
+  assert.deepEqual(edits.map((result) => result.status).sort(), [200, 409]);
+  const winner = edits.find((result) => result.status === 200).body;
+  assert.equal(winner.revision, 2);
+  const staleComment = await manager.request(`/api/posts/${post.id}/comments`, {
+    method: 'POST',
+    body: { revision: 1, body: 'Comment on an old view' },
+  });
+  assert.equal(staleComment.status, 409);
+  assert.equal((await transition(manager, winner, 'submit')).status, 200);
+  assert.equal((await transition(manager, winner, 'approve')).status, 200);
+  const history = (await manager.request(`/api/posts/${post.id}/history`)).body;
+  assert.deepEqual(
+    history.revisions.map((entry) => entry.revision),
+    [2, 1],
+  );
+  assert.equal(history.revisions[1].snapshot.assetId, 'asset_one');
+  assert.deepEqual(history.revisions[1].snapshot.destinationIds, ['destination_one']);
+  assert.equal(history.revisions[0].snapshot.assetId, winner.assetId);
+  assert.deepEqual(history.revisions[0].snapshot.destinationIds, winner.destinationIds);
+  assert.ok(history.events.some((event) => event.action === 'Draft approved'));
+  const comments = (await manager.request(`/api/posts/${post.id}/comments`)).body;
+  assert.equal(comments.length, 1);
+  assert.equal(comments[0].body, comment.body.body);
+  const copy = await manager.request(`/api/posts/${post.id}/duplicate`, {
+    method: 'POST',
+    body: {},
+  });
+  assert.equal(copy.status, 201);
+  assert.notEqual(copy.body.id, post.id);
+  assert.equal(copy.body.status, 'draft');
+  assert.equal(copy.body.revision, 1);
+  assert.equal(copy.body.approvedRevision, null);
+  assert.equal(copy.body.scheduledAt, null);
+  assert.equal(copy.body.assetId, winner.assetId);
+  assert.deepEqual(copy.body.destinationIds, winner.destinationIds);
+});
+
+test('provider hooks run inside atomic changes and a rejected job mutation rolls the edit back', async (t) => {
+  const observed = [];
+  const { app, url } = await fixture(t, {
+    extensions: true,
+    registerExtensions: async (_app, { db }) => ({
+      bootstrap: async () => ({ providerTestInstalled: true }),
+      validatePost: async (post) => {
+        observed.push(['validate', post.revision, db.inTransaction()]);
+      },
+      onPostChanged: async (oldPost, newPost) => {
+        observed.push(['changed', oldPost.revision, newPost.revision, db.inTransaction()]);
+        if (newPost.title === 'Refuse while publishing')
+          throw new Error('Simulated publication lock');
+      },
+      onPostTransition: async (_oldPost, newPost, action) => {
+        observed.push([action, newPost.revision, db.inTransaction()]);
+      },
+    }),
+  });
+  const manager = new Client(url);
+  assert.equal((await manager.bootstrap()).providerTestInstalled, true);
+  const post = await createDraft(manager);
+  const refusal = await manager.request(`/api/posts/${post.id}`, {
+    method: 'PATCH',
+    body: { revision: 1, title: 'Refuse while publishing' },
+  });
+  assert.equal(refusal.status, 500);
+  const stored = (await manager.request(`/api/posts/${post.id}`)).body;
+  assert.equal(stored.title, post.title);
+  assert.equal(stored.revision, 1);
+  assert.equal(
+    (
+      await app.locals.database
+        .prepare('SELECT COUNT(*) AS count FROM post_revisions WHERE post_id = ?')
+        .get(post.id)
+    ).count,
+    1,
+  );
+  assert.equal((await transition(manager, post, 'submit')).status, 200);
+  assert.equal((await transition(manager, post, 'approve')).status, 200);
+  assert.ok(observed.every((entry) => entry.at(-1) === true));
+  assert.ok(observed.some((entry) => entry[0] === 'approve'));
+});
+
+test('password attempt limits survive an application restart', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'school-marketing-limits-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const overrides = {
+    demoMode: false,
+    databasePath: join(directory, 'workspace.sqlite'),
+    adminEmail: 'manager@example.test',
+    adminPassword: 'Long manager password for rate limits',
+  };
+  const first = await fixture(t, overrides);
+  const client = new Client(first.url);
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    assert.equal(
+      (
+        await client.request('/api/auth/login', {
+          method: 'POST',
+          body: { email: 'manager@example.test', password: 'bad password' },
+        })
+      ).status,
+      401,
+    );
+  }
+  await first.close();
+  const second = await fixture(t, overrides);
+  const limited = await new Client(second.url).request('/api/auth/login', {
+    method: 'POST',
+    body: { email: 'manager@example.test', password: overrides.adminPassword },
   });
   assert.equal(limited.status, 429);
   assert.ok(Number(limited.headers.get('retry-after')) > 0);

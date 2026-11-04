@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import type { FormEvent, ReactNode } from 'react';
 import { ArrowRight, Check, CircleAlert, Info, LoaderCircle, X } from 'lucide-react';
 import type { Post, View, WorkspaceData } from './types';
+import { institutions } from './types';
 import { errorMessage } from './utils';
 import { Button } from '../components/UI';
 
@@ -9,7 +10,10 @@ type ToastKind = 'success' | 'error' | 'info';
 interface WorkspaceContextValue {
   data: WorkspaceData;
   refresh: () => Promise<void>;
+  request: <T = unknown>(path: string, options?: RequestInit) => Promise<T>;
   mutate: <T = unknown>(path: string, method: string, body?: unknown) => Promise<T>;
+  selectedInstitution: string;
+  setInstitution: (value: string) => void;
   toast: (message: string, kind?: ToastKind) => void;
   view: View;
   navigate: (view: View) => void;
@@ -30,6 +34,10 @@ const readView = (): View => {
   const value = window.location.hash.slice(1).split('?')[0] as View;
   return views.includes(value) ? value : 'overview';
 };
+const readSetupToken = () =>
+  window.location.hash.startsWith('#setup?')
+    ? new URLSearchParams(window.location.hash.split('?')[1]).get('token') || ''
+    : '';
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<WorkspaceData | null>(null);
@@ -37,6 +45,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState('');
   const [needsLogin, setNeedsLogin] = useState(false);
   const [view, setView] = useState<View>(readView);
+  const [setupToken, setSetupToken] = useState(readSetupToken);
+  const [selectedInstitution, setSelectedInstitution] = useState(() => {
+    const saved = localStorage.getItem('stmarys-institution') || 'all';
+    return institutions.includes(saved) ? saved : 'all';
+  });
   const [composer, setComposer] = useState<{ open: boolean; post?: Post }>({ open: false });
   const [toasts, setToasts] = useState<{ id: number; message: string; kind: ToastKind }[]>([]);
   const token = useRef('');
@@ -68,7 +81,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Unable to load your workspace.');
     token.current = result.csrfToken;
-    setData(result);
+    setData({
+      ...result,
+      providerSetup: result.providerSetup || [],
+      connections: result.connections || [],
+      mediaAssets: result.mediaAssets || [],
+      publicationJobs: result.publicationJobs || [],
+      websiteAnalytics: result.websiteAnalytics || [],
+    });
     setNeedsLogin(false);
     setError('');
   }, []);
@@ -81,7 +101,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, [refresh]);
   useEffect(() => {
-    const handle = () => setView(readView());
+    const handle = () => {
+      setView(readView());
+      setSetupToken(readSetupToken());
+    };
     window.addEventListener('hashchange', handle);
     return () => window.removeEventListener('hashchange', handle);
   }, []);
@@ -90,25 +113,83 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setView(next);
     window.scrollTo({ top: 0, behavior: 'instant' });
   }, []);
-  const mutate = useCallback(
-    async <T,>(path: string, method: string, body?: unknown): Promise<T> => {
+  const setInstitution = useCallback((value: string) => {
+    const next = institutions.includes(value) ? value : 'all';
+    setSelectedInstitution(next);
+    localStorage.setItem('stmarys-institution', next);
+  }, []);
+  const request = useCallback(
+    async <T,>(path: string, options: RequestInit = {}): Promise<T> => {
+      if (!path.startsWith('/') || path.startsWith('//'))
+        throw new Error('Invalid workspace request.');
+      const headers = new Headers(options.headers);
+      const method = (options.method || 'GET').toUpperCase();
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) headers.set('x-csrf-token', token.current);
+      if (typeof options.body === 'string' && !headers.has('Content-Type'))
+        headers.set('Content-Type', 'application/json');
       const response = await fetch(`/api${path}`, {
+        ...options,
         method,
+        headers,
         credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json', 'x-csrf-token': token.current },
-        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
-      const result = response.status === 204 ? {} : await response.json();
+      const content = await response.text();
+      let result;
+      try {
+        result = content ? JSON.parse(content) : {};
+      } catch {
+        throw new Error('The workspace could not complete this request. Please try again.');
+      }
       if (!response.ok) {
         if (response.status === 401) await refresh();
         throw new Error(result.error || 'We could not save that change. Please try again.');
       }
-      await refresh();
       return result as T;
     },
     [refresh],
   );
+  const mutate = useCallback(
+    async <T,>(path: string, method: string, body?: unknown): Promise<T> => {
+      const result = await request<T>(path, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      });
+      try {
+        await refresh();
+      } catch {
+        // The write is already committed. Preserve its result (including one-time
+        // setup links) so callers never repeat a successful create after a read failure.
+        toast(
+          'Your change was saved. The view could not refresh yet; reload to see the latest data.',
+          'info',
+        );
+      }
+      return result as T;
+    },
+    [refresh, request, toast],
+  );
   const openComposer = useCallback((post?: Post) => setComposer({ open: true, post }), []);
+  useEffect(() => {
+    if (!data || needsLogin) return;
+    const update = () => {
+      if (
+        document.visibilityState !== 'visible' ||
+        composer.open ||
+        document.querySelector('dialog[open]')
+      )
+        return;
+      void refresh().catch(() => {
+        /* Keep saved data visible while a transient refresh fails. */
+      });
+    };
+    const interval = window.setInterval(update, 60000);
+    document.addEventListener('visibilitychange', update);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', update);
+    };
+  }, [Boolean(data), needsLogin, composer.open, refresh]);
   if (loading)
     return (
       <div className="loading-screen">
@@ -117,7 +198,22 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         <p>Opening your workspace…</p>
       </div>
     );
-  if (needsLogin) return <Login onSuccess={refresh} />;
+  if (needsLogin || setupToken)
+    return (
+      <Login
+        setupToken={setupToken}
+        onSuccess={async () => {
+          window.history.replaceState(
+            null,
+            '',
+            `${window.location.pathname}${window.location.search}#overview`,
+          );
+          setSetupToken('');
+          setView('overview');
+          await refresh();
+        }}
+      />
+    );
   if (!data || error)
     return (
       <div className="loading-screen">
@@ -142,7 +238,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       value={{
         data,
         refresh,
+        request,
         mutate,
+        selectedInstitution,
+        setInstitution,
         toast,
         view,
         navigate,
@@ -185,9 +284,16 @@ export function useWorkspace() {
   return context;
 }
 
-function Login({ onSuccess }: { onSuccess: () => Promise<void> }) {
+function Login({
+  onSuccess,
+  setupToken = '',
+}: {
+  onSuccess: () => Promise<void>;
+  setupToken?: string;
+}) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent) {
@@ -195,10 +301,12 @@ function Login({ onSuccess }: { onSuccess: () => Promise<void> }) {
     setBusy(true);
     setError('');
     try {
-      const response = await fetch('/api/auth/login', {
+      if (setupToken && password !== confirmPassword)
+        throw new Error('Your passwords do not match.');
+      const response = await fetch(setupToken ? '/api/auth/setup' : '/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(setupToken ? { token: setupToken, password } : { email, password }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Please check your email and password.');
@@ -219,46 +327,95 @@ function Login({ onSuccess }: { onSuccess: () => Promise<void> }) {
             <span>Marketing workspace</span>
           </div>
         </div>
-        <span className="eyebrow">A little clarity. A lot of possibility.</span>
+        <span className="eyebrow">
+          {setupToken ? 'Your private team workspace' : 'A little clarity. A lot of possibility.'}
+        </span>
         <h1>
-          Welcome to your
-          <br />
-          next great idea.
+          {setupToken ? (
+            <>
+              Make yourself
+              <br />
+              at home.
+            </>
+          ) : (
+            <>
+              Welcome to your
+              <br />
+              next great idea.
+            </>
+          )}
         </h1>
-        <p>One place for your content, your team, and the work that moves your school forward.</p>
+        <p>
+          {setupToken
+            ? 'Choose a password to activate your account. This personal setup link can be used once.'
+            : 'One place for your content, your team, and the work that moves your school forward.'}
+        </p>
         <form onSubmit={submit}>
-          <label className="field">
-            Work email
-            <input
-              type="email"
-              required
-              autoComplete="username"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@school.edu.in"
-            />
-          </label>
+          {!setupToken && (
+            <label className="field">
+              Work email
+              <input
+                type="email"
+                required
+                autoComplete="username"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@school.edu.in"
+              />
+            </label>
+          )}
           <label className="field">
             Password
             <input
               type="password"
               required
-              autoComplete="current-password"
+              minLength={setupToken ? 12 : undefined}
+              maxLength={256}
+              autoComplete={setupToken ? 'new-password' : 'current-password'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
           </label>
+          {setupToken && (
+            <>
+              <small className="field-help">
+                Use at least 12 characters. A memorable passphrase works well.
+              </small>
+              <label className="field">
+                Confirm password
+                <input
+                  type="password"
+                  required
+                  minLength={12}
+                  maxLength={256}
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                />
+              </label>
+            </>
+          )}
           {error && (
             <p className="form-error" role="alert">
               {error}
             </p>
           )}
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? 'Signing in…' : 'Open workspace'}
+            {busy
+              ? setupToken
+                ? 'Activating your account…'
+                : 'Signing in…'
+              : setupToken
+                ? 'Set password & open workspace'
+                : 'Open workspace'}
             <ArrowRight size={17} />
           </Button>
         </form>
-        <p className="login-note">Need access? Ask your workspace manager to create an account.</p>
+        <p className="login-note">
+          {setupToken
+            ? 'An expired or already used link? Ask your manager for a new setup link.'
+            : 'Need access or a password reset? Ask your manager for a personal setup link.'}
+        </p>
       </section>
       <aside className="login-art" aria-hidden="true">
         <div className="login-art-card">

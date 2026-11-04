@@ -34,7 +34,7 @@ import type { Post } from '../lib/types';
 import { downloadCsv, formatDate, formatNumber } from '../lib/utils';
 
 export default function Overview() {
-  const { data, navigate, openComposer, toast } = useWorkspace();
+  const { data, navigate, openComposer, toast, selectedInstitution } = useWorkspace();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reviewId, setReviewId] = useState<string | null>(null);
   const [period, setPeriod] = useState(7);
@@ -48,14 +48,21 @@ export default function Overview() {
   );
   const greeting =
     hour < 12 ? 'Good morning, team.' : hour < 17 ? 'Good afternoon, team.' : 'Good evening, team.';
-  const pending = data.posts.filter((p) => p.status === 'in_review');
+  const scopedPosts = data.posts.filter(
+    (p) => selectedInstitution === 'all' || p.institution === selectedInstitution,
+  );
+  const scopedConnections = data.connections.filter(
+    (connection) => selectedInstitution === 'all' || connection.institution === selectedInstitution,
+  );
+  const connected = scopedConnections.filter((connection) => connection.status === 'connected');
+  const pending = scopedPosts.filter((p) => p.status === 'in_review');
   const selected = pending.find((p) => p.id === selectedId) || pending[0];
   const reviewing = data.posts.find((p) => p.id === reviewId);
   const points = data.analytics.points.slice(-period);
   const reach = points.reduce((sum, p) => sum + p.reach, 0);
   const engagements = points.reduce((sum, p) => sum + p.engagement, 0);
   const enquiries = points.reduce((sum, p) => sum + p.enquiries, 0);
-  const upcoming = data.posts
+  const upcoming = scopedPosts
     .filter(
       (p) =>
         p.scheduledAt &&
@@ -111,7 +118,7 @@ export default function Overview() {
           <span className="scope-symbol">
             <Users size={13} />
           </span>
-          <span>All institutions</span>
+          <span>{selectedInstitution === 'all' ? 'All institutions' : selectedInstitution}</span>
           <span className="context-divider" />
           <span>Admissions & community</span>
         </div>
@@ -126,6 +133,24 @@ export default function Overview() {
             <option value={30}>Last 30 days</option>
           </select>
         </label>
+      </div>
+      <div className="workspace-setup-strip">
+        <div>
+          <strong>
+            {connected.length
+              ? `${connected.length} account${connected.length === 1 ? '' : 's'} connected`
+              : 'Bring your accounts into the workspace'}
+          </strong>
+          <p>
+            {connected.length
+              ? 'Open Connections to check access, import website reports or manage publishing destinations.'
+              : 'Authorize Google Analytics and an eligible Instagram account when you are ready. Your team can start drafting and reviewing now.'}
+          </p>
+        </div>
+        <Button onClick={() => navigate('settings')}>
+          {connected.length ? 'Manage connections' : 'Set up connections'}
+          <ArrowRight size={14} />
+        </Button>
       </div>
       <div className="metric-grid">
         <div className="metric-card">
@@ -421,7 +446,9 @@ export default function Overview() {
           </div>
           <div className="upcoming-note">
             <span />
-            Local plan · publishing is not connected
+            {connected.some((connection) => connection.provider === 'instagram')
+              ? 'Only approved revisions with a publishing job are sent automatically'
+              : 'Content plan · connect Instagram to publish approved posts'}
           </div>
           <button
             className="upcoming-calendar"

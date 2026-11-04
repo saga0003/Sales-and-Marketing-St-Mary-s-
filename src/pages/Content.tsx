@@ -10,10 +10,12 @@ import {
   Clock3,
   FileText,
   Filter,
+  Images,
   Layers3,
   LayoutList,
   Plus,
   Search,
+  Send,
   ShieldCheck,
   Sparkles,
   Video,
@@ -23,6 +25,7 @@ import { useWorkspace } from '../lib/workspace';
 import { institutions, type Platform, type Post, type PostStatus } from '../lib/types';
 import { Badge, Button, EmptyState, Modal, PlatformIcon, StatusBadge } from '../components/UI';
 import PostPreview from '../components/PostPreview';
+import MediaLibrary from '../components/MediaLibrary';
 import '../styles/content.css';
 
 type ContentTab = 'library' | 'calendar' | 'approvals';
@@ -302,8 +305,8 @@ function Calendar({
       <div className="calendar-local-note">
         <CalendarClockIcon />
         <span>
-          Dates are saved in your local content plan. A connected publishing service is required to
-          send posts to social channels.
+          Dates use India Standard Time. Manager approval queues content for its selected publishing
+          accounts. Content without a publishing destination stays in the team’s plan.
         </span>
       </div>
     </section>
@@ -315,12 +318,22 @@ function CalendarClockIcon() {
 }
 
 export default function Content({ initialTab = 'library' }: { initialTab?: ContentTab }) {
-  const { data, openComposer } = useWorkspace();
+  const {
+    data,
+    openComposer,
+    selectedInstitution: institution,
+    setInstitution,
+    mutate,
+    toast,
+  } = useWorkspace();
   const [tab, setTab] = useState<ContentTab>(initialTab);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<PostStatus | 'all'>('all');
   const [platform, setPlatform] = useState<Platform | 'all'>('all');
-  const [institution, setInstitution] = useState('all');
+  const [mediaOpen, setMediaOpen] = useState(false);
+  const [deliveryOpen, setDeliveryOpen] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [deliveryError, setDeliveryError] = useState('');
   const [sort, setSort] = useState('updated');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
@@ -342,12 +355,24 @@ export default function Content({ initialTab = 'library' }: { initialTab?: Conte
 
   const counts = useMemo(
     () => ({
-      all: data.posts.length,
-      review: data.posts.filter((post) => post.status === 'in_review').length,
-      approved: data.posts.filter((post) => post.status === 'approved').length,
-      scheduled: data.posts.filter((post) => post.status === 'scheduled').length,
+      all: data.posts.filter((post) => institution === 'all' || post.institution === institution)
+        .length,
+      review: data.posts.filter(
+        (post) =>
+          post.status === 'in_review' &&
+          (institution === 'all' || post.institution === institution),
+      ).length,
+      approved: data.posts.filter(
+        (post) =>
+          post.status === 'approved' && (institution === 'all' || post.institution === institution),
+      ).length,
+      scheduled: data.posts.filter(
+        (post) =>
+          post.status === 'scheduled' &&
+          (institution === 'all' || post.institution === institution),
+      ).length,
     }),
-    [data.posts],
+    [data.posts, institution],
   );
   const filteredPosts = useMemo(() => {
     const search = query.trim().toLowerCase();
@@ -410,9 +435,30 @@ export default function Content({ initialTab = 'library' }: { initialTab?: Conte
     setStatus(nextStatus === 'in_review' ? 'all' : nextStatus);
     setQuery('');
     setPlatform('all');
-    setInstitution('all');
     setSelectedId(null);
     setShowPreview(false);
+  }
+  const dueJobs = data.publicationJobs.filter(
+    (job) => job.status === 'queued' && new Date(job.scheduledAt).getTime() <= Date.now(),
+  );
+  const attentionJobs = data.publicationJobs.filter((job) =>
+    ['failed', 'needs_reconciliation'].includes(job.status),
+  );
+  async function runNextJob() {
+    setRunning(true);
+    setDeliveryError('');
+    try {
+      const result = await mutate<{ processed: number }>('/jobs/run', 'POST', {});
+      toast(
+        result.processed
+          ? 'The next due publishing job was processed. Check its confirmed result below.'
+          : 'There are no due publishing jobs to process.',
+      );
+    } catch (error) {
+      setDeliveryError(error instanceof Error ? error.message : 'Publishing could not run.');
+    } finally {
+      setRunning(false);
+    }
   }
 
   return (
@@ -427,10 +473,16 @@ export default function Content({ initialTab = 'library' }: { initialTab?: Conte
             A space for good ideas, thoughtful reviews, and your next great post.
           </p>
         </div>
-        <Button variant="primary" onClick={() => openComposer()}>
-          <Plus size={18} />
-          Create post
-        </Button>
+        <div className="content-heading-actions">
+          <Button onClick={() => setMediaOpen(true)}>
+            <Images size={17} />
+            Media library
+          </Button>
+          <Button variant="primary" onClick={() => openComposer()}>
+            <Plus size={18} />
+            Create post
+          </Button>
+        </div>
       </header>
 
       <div className="content-stats">
@@ -469,13 +521,111 @@ export default function Content({ initialTab = 'library' }: { initialTab?: Conte
             <CalendarRange size={19} />
           </span>
           <span>
-            <span>Locally scheduled</span>
+            <span>Planned & scheduled</span>
             <strong>{counts.scheduled}</strong>
           </span>
           <ArrowUpRight size={17} />
         </button>
       </div>
 
+      {data.publicationJobs.length > 0 && (
+        <section className="content-delivery-panel">
+          <button
+            type="button"
+            className="content-delivery-toggle"
+            aria-expanded={deliveryOpen}
+            onClick={() => setDeliveryOpen(!deliveryOpen)}
+          >
+            <Send size={18} />
+            <span>
+              <strong>Publishing queue</strong>
+              <small>
+                {dueJobs.length} due now · {attentionJobs.length} need attention · all schools
+              </small>
+            </span>
+            <Badge tone={attentionJobs.length ? 'amber' : 'violet'}>
+              {data.publicationJobs.length} jobs
+            </Badge>
+            <ChevronRight size={16} className={deliveryOpen ? 'rotate' : ''} />
+          </button>
+          {deliveryOpen && (
+            <div className="content-delivery-body">
+              {deliveryError && (
+                <p className="form-error" role="alert">
+                  {deliveryError}
+                </p>
+              )}
+              <div className="content-delivery-run">
+                <p>
+                  Each run processes the next due job across all schools. Only the exact
+                  manager-approved revision can be delivered.
+                </p>
+                {data.user.role === 'manager' && (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    disabled={running || !dueJobs.length}
+                    onClick={() => void runNextJob()}
+                  >
+                    <Send size={14} />
+                    {running ? 'Processing…' : 'Process next due job'}
+                  </Button>
+                )}
+              </div>
+              <div className="content-delivery-jobs">
+                {data.publicationJobs
+                  .slice()
+                  .reverse()
+                  .slice(0, 12)
+                  .map((job) => {
+                    const jobPost = data.posts.find((post) => post.id === job.postId);
+                    return (
+                      <button
+                        type="button"
+                        key={job.id}
+                        disabled={!jobPost}
+                        onClick={() => {
+                          if (jobPost) {
+                            setTab('library');
+                            setQuery('');
+                            setStatus('all');
+                            setPlatform('all');
+                            setInstitution('all');
+                            setSelectedId(jobPost.id);
+                            setShowPreview(true);
+                          }
+                        }}
+                      >
+                        <span>
+                          <strong>{jobPost?.title || 'Saved content'}</strong>
+                          <small>
+                            {job.accountName} · Revision {job.revision}
+                          </small>
+                        </span>
+                        <Badge
+                          tone={
+                            job.status === 'published'
+                              ? 'green'
+                              : job.status === 'failed'
+                                ? 'red'
+                                : job.status === 'needs_reconciliation'
+                                  ? 'amber'
+                                  : 'gray'
+                          }
+                        >
+                          {job.status === 'needs_reconciliation'
+                            ? 'Check confirmation'
+                            : job.status.replaceAll('_', ' ')}
+                        </Badge>
+                        <ChevronRight size={14} />
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
       <div className="content-navigation">
         <div className="tabs" role="tablist" aria-label="Content views">
           <button
@@ -763,6 +913,7 @@ export default function Content({ initialTab = 'library' }: { initialTab?: Conte
           />
         </Modal>
       )}
+      {mediaOpen && <MediaLibrary onClose={() => setMediaOpen(false)} />}
     </div>
   );
 }
