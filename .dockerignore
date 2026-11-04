@@ -1,0 +1,16 @@
+.git
+.github
+node_modules
+dist
+data
+.env
+.env.*
+coverage
+artifacts
+.openai
+*.tsbuildinfo
+**/*.sqlite
+**/*.sqlite-shm
+**/*.sqlite-wal
+npm-debug.log*
+.DS_Store

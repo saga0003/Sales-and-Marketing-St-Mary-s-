@@ -1,0 +1,28 @@
+services:
+  workspace:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: stmarys-marketing-workspace:local
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 15s
+    ports:
+      - '127.0.0.1:${HOST_PORT:-3001}:3001'
+    environment:
+      NODE_ENV: production
+      DEMO_MODE: 'false'
+      PORT: '3001'
+      BIND_ADDRESS: '0.0.0.0'
+      DATABASE_PATH: /app/data/workspace.sqlite
+      COOKIE_SECURE: 'true'
+      TRUST_PROXY: 'true'
+      APP_ORIGIN: '${APP_ORIGIN:?Set APP_ORIGIN to the public HTTPS origin in .env}'
+      BOOTSTRAP_ADMIN_EMAIL: '${BOOTSTRAP_ADMIN_EMAIL:?Set a bootstrap manager email in .env}'
+      BOOTSTRAP_ADMIN_PASSWORD: '${BOOTSTRAP_ADMIN_PASSWORD:?Set a unique strong bootstrap password in .env}'
+      BOOTSTRAP_ADMIN_NAME: '${BOOTSTRAP_ADMIN_NAME:-Workspace manager}'
+    volumes:
+      - workspace-data:/app/data
+
+volumes:
+  workspace-data:
