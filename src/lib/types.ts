@@ -149,7 +149,7 @@ export interface WorkspaceData {
   teamUsers?: User[];
   demoMode: boolean;
   evaluationMode?: boolean;
-  storageMode?: string;
+  storage?: { driver: 'postgres' | 'sqlite'; persistent: boolean };
   csrfToken: string;
   posts: Post[];
   opportunities: Opportunity[];

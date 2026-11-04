@@ -1,65 +1,72 @@
-# Release validation
+# Version 0.2 release validation
 
-Validation date: **4 November 2026**. Scope: the first self-hosted school marketing workspace, with local persistence and approval workflows. This document records checks performed on the implementation; it is not a platform certification or a claim of live provider connectivity.
+Validation date: **5 November 2026 (India Standard Time)**. This release combines a shared team workspace with the first real provider adapters: Google Analytics 4 reporting and approved Instagram single-image publication. It is an evaluation release, with explicit provider setup requirements.
+
+Hosted application: [St. Mary’s Marketing Workspace](https://stmarys-marketing-workspace.vercel.app/).
 
 ## Automated checks
 
-- `npm run check`: TypeScript compilation with strict settings.
-- `npm run build`: production frontend bundle.
-- `npm test`: **13 integration tests**, using actual HTTP requests against isolated SQLite databases.
-- `npm run format:check`: source and documentation formatting.
+- `npm test`: **45 passing tests**, including real HTTP requests against isolated local databases, provider HTTP fixtures and broker signature tests.
+- `npm run check` and `npm run build`: passed.
+- `npm run format:check`: passed for source and documentation before final packaging.
+- `npm audit --omit=dev`: zero known production dependency vulnerabilities after a targeted `@vercel/cli-config` override resolved its outdated nested Zod dependency. This is a point-in-time audit result.
 
-The API suite covers the following risks:
+Covered behavior includes personal setup links, expiry/replay checks, session rotation and revocation, team permissions, persistent login rate limits, concurrent revision checks, transaction isolation/savepoints, source provenance, and revision-linked comments/history.
 
-| Area                      | Verified behavior                                                                                                                                      |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Production initialization | No default credentials or demonstration records; bootstrap accounts use the same validation as later logins                                            |
-| Authentication            | Password hashes rather than plaintext; separate sessions; sign-in failure limits without penalizing successful school-team logins                      |
-| Request protection        | CSRF tokens and Origin checks; cross-site mutation rejection                                                                                           |
-| Team permissions          | Contributors cannot approve, schedule, create managers, or edit another contributor’s drafts                                                           |
-| Content revisions         | Stale writes are rejected; editing approved or planned content clears its approval and local planned state                                             |
-| Planning                  | Future-date validation and exact approved revision checks; reaching the date does not pretend an external post was sent                                |
-| Research                  | Manual production entry starts unverified; client verification/state injection and unsafe URLs are rejected; source provenance survives draft creation |
-| Duplicate requests        | Repeating research-to-draft conversion returns the existing draft                                                                                      |
-| Workspace records         | CRUD validation, partial updates, safe URLs, valid dates, and honest manual monitoring states                                                          |
-| Persistence               | Sessions, changes and audit entries survive reopening the SQLite database without reseeding                                                            |
-| Environment isolation     | A demo database cannot be opened as a production workspace, or vice versa                                                                              |
+Provider tests cover encrypted credentials, session-bound OAuth state, read-only Google scope and PKCE, paginated account discovery, distinct GA4 period totals, immutable media hashes, image decoding and normalization, approval-bound jobs, exclusive worker claims, retries, cancellation and uncertain-result reconciliation. The reschedule race and partially published multi-account revision race have dedicated regressions.
 
-## Browser checks
+Provider HTTP tests use controlled fixtures. They do not establish that a school account has completed OAuth approval or that a real social post was published.
 
-The running app was exercised in Chromium through the managed development preview. The desktop screenshot is 1363 × 936 pixels. The development harness also rendered the actual app inside 390 × 844 and 768 × 844 pixel iframe viewports; these exercise responsive CSS rather than scaling a desktop screenshot. Scrollbars reduce the corresponding content widths to 375 and 753 pixels.
+## Hosted API and cloud storage checks
 
-| Workflow                              | Observed result                                                                                                  |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Create a draft and send it for review | The saved record appeared in the manager’s queue with revision 1                                                 |
-| Manager approval                      | The interface displayed Approved, the revision, the reviewer and approval time                                   |
-| Contributor preview                   | Approval and editing actions were absent for submitted content, including the contributor’s own submitted draft  |
-| Content navigation and filtering      | The overview opened Approvals; an unmatched search showed an empty state and cleared the selected detail panel   |
-| Mobile calendar                       | The month displayed an agenda and date jump control instead of a compressed desktop grid                         |
-| Mobile composer                       | The dialog fit the viewport, fields scrolled, the title received focus and save/review controls remained visible |
-| Mobile tasks                          | A task was created with the “In 7 days” shortcut, moved into progress and completed; stored totals updated       |
-| Manual research entry                 | A source-linked brief saved successfully and opened with Needs source review and the entered classification      |
-| Research to draft                     | The new draft appeared in Content with the source link and an explicit pending-verification note                 |
-| Responsive research and analytics     | The inspected layouts remained within their page width; tables retained their own horizontal scrolling           |
+The following checks ran against the Vercel application using disposable validation records in the new isolated Supabase project:
 
-The optional source date was left blank in the manual-entry test, verifying that the UI identifies the resulting date as a source/reference date rather than asserting an official publication date.
+| Boundary                 | Observed result                                                                                            |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| API routing and database | Health returned HTTP 200 with `postgres` and `persistent: true`                                            |
+| Anonymous access         | Bootstrap returned HTTP 401                                                                                |
+| Personal setup           | An expiring test setup token accepted a new password and established a session                             |
+| Sign-in                  | Subsequent password sign-in returned HTTP 200                                                              |
+| Shared bootstrap         | Authenticated response returned the test user, empty production analytics and honest provider setup states |
+| Raw media upload         | PNG upload returned HTTP 201 and stored a normalized JPEG with the expected dimensions                     |
+| Content creation         | Image-backed draft saved with HTTP 201                                                                     |
+| Review and approval      | Submit and approve returned the expected states for the exact revision                                     |
+| Discussion/history       | Revision comment saved and two saved revisions were returned                                               |
+| Revision protection      | Editing cleared approval; a stale write returned HTTP 409                                                  |
+| Team setup               | Manager created a contributor with a personal setup link; no email was sent                                |
+| Bounded worker           | Manager invocation completed with no due external jobs                                                     |
 
-## Visual decisions checked
+The initial manager’s setup token was kept unused for the owner. Temporary accounts and workflow records are removed after the persistence check.
 
-- Light surfaces, navy navigation and violet emphasis adapt the supplied reference to school marketing work.
-- Review context stays next to the selected content on a wide screen; narrow screens use a modal detail view.
-- Status labels supplement color, and controls retain visible keyboard focus.
-- Sample analytics, manual monitoring and local planning remain explicit.
-- Reported reach is labelled as a sum of daily figures rather than a deduplicated number of people. Channel snapshots are separate from the date-filtered trend.
+The private Supabase image broker was also tested directly: upload, authenticated read and temporary signed delivery returned matching bytes; an unsigned broker request returned HTTP 401. The bucket is private and limited to normalized JPEGs of at most 3 MiB. Supabase’s security advisory check returned no findings for the new project.
 
-The screenshots in `docs/images/` show illustrative demonstration data. Test records and SQLite files are not included in git.
+The deployment uses verified database TLS with the trusted Supabase root certificate. Certificate verification was retained when resolving the initial trust-chain failure. The working transaction pooler is the project’s `aws-0-ap-south-1` endpoint. Only production receives production credentials.
 
-## Limits of this verification
+## Browser and visual checks
 
-- No social, advertising, search, CRM or news account was connected. Provider permission reviews, live data accuracy, actual publication, billing changes and background monitoring were not exercised.
-- Production authentication and mode separation were covered through the API tests. A public HTTPS deployment was not created in this session.
-- Docker and Compose files were checked statically. Docker was unavailable in the environment, so no container build or container deployment is claimed.
-- The browser checks used Chromium. Native date-picker selection on target devices, Safari/Firefox behavior, screen readers, zoom/reflow and a formal contrast/conformance audit remain pilot checks.
-- A single SQLite-backed instance is the intended deployment. Load tests, distributed workers, horizontal scaling and disaster-recovery drills have not been performed.
+The hosted login surface was opened through Vercel’s protected review link. Authenticated production workflows were exercised through the HTTP API. The initial owner password remains for the user to choose.
 
-For the next implementation milestones, see [ROADMAP.md](ROADMAP.md). For startup, persistent storage and account setup, see the [README](../README.md).
+The actual development app was also exercised in an isolated sample workspace through the managed browser preview:
+
+- A draft was created, saved, located in Content, submitted, and approved. The saved revision and approval record appeared in the detail panel.
+- The content library, school selector, review controls, exact destination explanations and empty connection guidance rendered.
+- A **390 × 844** iframe viewport exercised the responsive application itself. Navigation, filters, the composer and the media-picker dialog stayed within the phone-width layout. This was a responsive layout check, not device emulation or a scaled screenshot.
+- The browser file-chooser upload check was interrupted and is not claimed as passed. The hosted raw-upload API and complete private storage path passed separately.
+
+The committed content screenshot shows **demonstration records**. It illustrates the interface; it does not show live school analytics or connected social accounts.
+
+## Deployment safeguards
+
+- Vercel serves the Vite frontend and Express API; Supabase persists the private application schema and images.
+- Automatic schema migration is used for initial provisioning and then disabled.
+- A five-minute cron processes at most one due publication job per invocation. Manager-triggered execution uses the same approval checks.
+- No provider credentials or user account tokens are stored in Git or the client bundle. Saved provider credentials are encrypted on the server.
+- No Google or Meta account was authorized during validation, and no social post or advertising change was made.
+
+## Remaining acceptance checks
+
+The account owner must complete Google/Meta application setup and authorize eligible school accounts. Before relying on automated publication, approve a deliberately chosen real Instagram image post and reconcile its recorded ID/URL with the provider. Compare an imported GA4 period with the original property report.
+
+A normal week of team use, backup/restore drill, native phone uploads, Safari/Firefox coverage, screen-reader testing and a formal accessibility audit remain pilot checks. Scheduled exam/news collection, competitor monitoring, Search Console, ad reporting/operations, other social publishers, video/carousels and a full Notion-style collaborative editor are not implemented by this release.
+
+See [USER-GUIDE.md](USER-GUIDE.md), [ROADMAP.md](ROADMAP.md) and the [provider operations guide](../server/extensions/README.md).

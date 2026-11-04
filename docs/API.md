@@ -331,7 +331,7 @@ databases. It verifies:
 
 # Version 0.2 additions
 
-The authenticated bootstrap response now includes `teamUsers` (manager only), `providerSetup`, `connections`, `mediaAssets`, `publicationJobs`, `websiteAnalytics`, `evaluationMode` and `storageMode`. Provider application secrets and account tokens never appear in these responses.
+The authenticated bootstrap response now includes `teamUsers` (manager only), `providerSetup`, `connections`, `mediaAssets`, `publicationJobs`, `websiteAnalytics`, `evaluationMode` and `storage: { driver, persistent }`. Provider application secrets and account tokens never appear in these responses.
 
 | Endpoint                                   | Purpose                                                                            |
 | ------------------------------------------ | ---------------------------------------------------------------------------------- |

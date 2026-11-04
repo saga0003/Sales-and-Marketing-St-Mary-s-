@@ -152,3 +152,9 @@ Before an upgrade, take a restorable backup, review pending SQL and temporarily 
 | `docs/ROADMAP.md`, `docs/UX-RESEARCH.md`    | Broader product direction and interface rationale           |
 
 Next integrations remain official-source ingestion, supported competitor monitoring, SEO/Search Console, ads reporting, additional publishing platforms/formats and richer documents. This is not a complete Metricool replacement. Each addition needs provider permissions, honest connection states, durable jobs where relevant and tests of its approval/data boundaries.
+
+## Evaluation walkthrough
+
+See [the user guide](docs/USER-GUIDE.md) for owner activation, team access, the ten-minute review walkthrough and connection prerequisites. The current hosted implementation was checked against [the release validation record](docs/VALIDATION.md).
+
+The hosted database grants the dedicated `smis_marketing_app` role to the project’s existing administrative `postgres` role for project-owner maintenance. Anonymous and authenticated Data API roles have no access to the private application schema. Runtime connections still use the dedicated application role.
