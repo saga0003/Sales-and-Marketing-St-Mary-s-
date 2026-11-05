@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseFeed, parseNoticePage, youtubeFeed, publicLink } from './parse.mjs';
+import { parseFeed, parseNoticePage, youtubeFeed, publicLink, attributes } from './parse.mjs';
 import { inspectPage } from './seo.mjs';
 
 test('RSS extraction preserves publisher dates, strips markup, filters keywords and keeps correction identity', () => {
@@ -114,16 +114,43 @@ test('an unclosed oversized input value does not expose apparent tags inside it'
   );
 });
 
-test('interpreted links and metadata retain the 16 KiB individual-tag limit', () => {
-  for (const tag of ['a', 'meta', 'link']) {
-    assert.throws(
-      () =>
-        parseNoticePage(
-          `<${tag} data-value="${'A'.repeat(17000)}">Examination notice</${tag}>`,
-          'https://board.example.org/',
-        ),
-      { code: 'source_markup_limit' },
-    );
+test('oversized anchors and metadata yield no attributes while following notices remain readable', () => {
+  const padding = 'A'.repeat(17000);
+  const anchor = `<a href="/fake-exam.pdf" data-padding="${padding}">`;
+  const meta = `<meta name="description" content="Fake description" data-padding="${padding}">`;
+  const canonical = `<link rel="canonical" href="/fake-canonical" data-padding="${padding}">`;
+  for (const tag of [anchor, meta, canonical]) assert.deepEqual(attributes(tag), {});
+  const html = `<html><head>${meta}${canonical}<meta name="description" content="Real description"></head><body>
+    ${anchor}Fake examination notice</a><a href="/real-exam.pdf">Official examination notice</a></body></html>`;
+  const notices = parseNoticePage(html, 'https://board.example.org/');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].url, 'https://board.example.org/real-exam.pdf');
+  const report = inspectPage(
+    {
+      text: html,
+      status: 200,
+      url: 'https://board.example.org/',
+      headers: {},
+      robotsState: 'checked',
+    },
+    {
+      id: 'audit',
+      siteId: 'site',
+      url: 'https://board.example.org/',
+      checkedAt: '2026-11-05T00:00:00Z',
+    },
+  );
+  assert.equal(report.description, 'Real description');
+  assert.equal(report.canonical, null);
+});
+
+test('large inert and unknown tags preserve quoted boundaries without inventing notice links', () => {
+  for (const tag of ['img', 'svg', 'div', 'unknown'.repeat(20)]) {
+    const html = `<${tag} data-value="${'A'.repeat(17000)}<a href='/fake-exam.pdf'>Fake examination notice</a>"></${tag}>
+      <a href="/real-exam.pdf">Official examination notice</a>`;
+    const notices = parseNoticePage(html, 'https://board.example.org/');
+    assert.equal(notices.length, 1, tag);
+    assert.equal(notices[0].url, 'https://board.example.org/real-exam.pdf', tag);
   }
 });
 

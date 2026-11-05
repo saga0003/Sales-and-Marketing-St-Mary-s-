@@ -308,13 +308,14 @@ test('SEO requires an exact owned origin, supports a public challenge and persis
   });
 });
 
-test('ownership meta challenge must be in the actual head, not a script, comment or body', async (t) => {
+test('ownership meta challenge must be a bounded tag in the actual head, not a script, comment or body', async (t) => {
   const f = await fixture(t);
   const site = await f.sites.create('https://school.example.org/', actor);
   for (const html of [
     `<html><head><script>const text = '${site.metaTag}';</script></head><body></body></html>`,
     `<html><head><!-- ${site.metaTag} --></head><body></body></html>`,
     `<html><head></head><body>${site.metaTag}</body></html>`,
+    `<html><head>${site.metaTag.replace('<meta ', `<meta data-padding="${'A'.repeat(17000)}" `)}</head><body></body></html>`,
   ]) {
     f.setReader((url) =>
       url.endsWith('verification.txt')

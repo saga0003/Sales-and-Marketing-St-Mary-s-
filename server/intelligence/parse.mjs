@@ -50,28 +50,27 @@ export function* scanTags(source) {
       cursor = close < 0 ? source.length : close + 3;
       continue;
     }
-    const matched = source
+    let matched = source
       .slice(start, start + 100)
       .match(/^<(\/?)([A-Za-z][\w:-]*|!doctype)(?=[\s/>])/i);
+    // Unknown or unusually long names still need one structural boundary, so
+    // apparent anchors inside their quoted attributes cannot escape the token.
+    if (!matched) {
+      const unknown = source.slice(start, start + 3).match(/^<(\/?)(?=[A-Za-z])/);
+      if (unknown) matched = [unknown[0], unknown[1], '#unknown'];
+    }
     if (!matched) {
       cursor = start + 1;
       continue;
     }
     const tag = matched[2].toLowerCase();
-    // ASP.NET notice pages can carry large hidden view-state inputs. Inputs
-    // provide no interpreted metadata here: skip their complete quoted values
-    // in this linear scan, bounded by the reader's document limit. In particular,
-    // a fake anchor inside a value must never become a separate token.
+    // Large view-state inputs and inline data URLs are common on public pages.
+    // Scan the complete boundary once within the reader's document budget;
+    // attributes() independently refuses to interpret tags over 16 KiB.
     const inertInput = !matched[1] && tag === 'input';
     let index = start + matched[0].length;
     let quote = '';
     for (; index < source.length; index += 1) {
-      if (!inertInput && index - start > 16384)
-        throw new HttpError(
-          422,
-          'A source markup tag exceeds the reading limit.',
-          'source_markup_limit',
-        );
       const char = source[index];
       if (quote) {
         if (char === quote) quote = '';
@@ -167,6 +166,9 @@ export function plainText(value, limit = 2000) {
 }
 
 export function attributes(tag) {
+  // Structural scans may skip large inert markup, but no URL, SEO metadata or
+  // ownership challenge can be extracted from an oversized attribute region.
+  if (tag.length > 16384) return {};
   const result = {};
   const source = tag.replace(/^<\/?[\w:-]+/, '').replace(/\/?\s*>$/, '');
   const pattern = /([^\s=<>/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
