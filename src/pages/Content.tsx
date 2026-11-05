@@ -29,6 +29,15 @@ import MediaLibrary from '../components/MediaLibrary';
 import '../styles/content.css';
 
 type ContentTab = 'library' | 'calendar' | 'approvals';
+type PostSelectionRequest = { id: string; tab: 'library' | 'approvals' };
+function readPostSelection(): PostSelectionRequest | null {
+  const [view, query] = window.location.hash.slice(1).split('?');
+  const params = new URLSearchParams(query);
+  const id = params.get('post');
+  return view === 'content' && id
+    ? { id, tab: params.get('tab') === 'approvals' ? 'approvals' : 'library' }
+    : null;
+}
 const platformNames: Record<Platform, string> = {
   instagram: 'Instagram',
   facebook: 'Facebook',
@@ -336,6 +345,7 @@ export default function Content({ initialTab = 'library' }: { initialTab?: Conte
   const [deliveryError, setDeliveryError] = useState('');
   const [sort, setSort] = useState('updated');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [postSelection, setPostSelection] = useState(readPostSelection);
   const [showPreview, setShowPreview] = useState(false);
   const [isNarrow, setIsNarrow] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 1150px)').matches,
@@ -346,6 +356,11 @@ export default function Content({ initialTab = 'library' }: { initialTab?: Conte
     setSelectedId(null);
     setShowPreview(false);
   }, [initialTab]);
+  useEffect(() => {
+    const changed = () => setPostSelection(readPostSelection());
+    window.addEventListener('hashchange', changed);
+    return () => window.removeEventListener('hashchange', changed);
+  }, []);
   useEffect(() => {
     const media = window.matchMedia('(max-width: 1150px)');
     const onChange = () => setIsNarrow(media.matches);
@@ -438,6 +453,20 @@ export default function Content({ initialTab = 'library' }: { initialTab?: Conte
     setSelectedId(null);
     setShowPreview(false);
   }
+  useEffect(() => {
+    if (!postSelection) return;
+    const post = data.posts.find((item) => item.id === postSelection.id);
+    if (!post) return;
+    resetFilters();
+    setInstitution(post.institution);
+    setTab(
+      postSelection.tab === 'approvals' && post.status === 'in_review' ? 'approvals' : 'library',
+    );
+    selectPost(post);
+    // Consume this request. Background refreshes must not reset later manual selection.
+    setPostSelection(null);
+  }, [postSelection, data.posts, isNarrow, setInstitution]);
+
   const dueJobs = data.publicationJobs.filter(
     (job) => job.status === 'queued' && new Date(job.scheduledAt).getTime() <= Date.now(),
   );

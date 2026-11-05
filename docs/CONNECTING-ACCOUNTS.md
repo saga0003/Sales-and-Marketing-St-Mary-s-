@@ -149,14 +149,14 @@ Stories, mixed-media carousels, Facebook/LinkedIn video, arbitrary YouTube sched
 3. For a reporting account, choose **Import first report** or open its report panel. Select a completed date range and import. Check the account, institution, dates, import time and notes. Compare one or two figures with the provider's own dashboard using the same settings.
 4. Create a clearly labelled pilot draft in **Content**, choose a supported format and actual media, and select only the intended test destination. YouTube should begin with private visibility. Facebook, Instagram, LinkedIn and Business Profile posts can be publicly visible on the chosen account, so use an account and caption appropriate for that pilot.
 5. Submit the draft, ask a manager to request changes with a note, revise and resubmit. Confirm that the manager sees the exact final media, caption, destination and platform options before approving.
-6. Approval with a destination creates the publication job. A worker must be enabled and running for actual delivery. Use the Publications view to see the job state, any returned provider ID, processing status and link. Approval without destinations remains a workspace review action.
+6. Approval with a destination creates the publication job. A worker must be enabled and running for actual delivery. Open **Content → Publishing queue**, select the job’s post, and inspect its **Publishing** section for the job state, returned provider ID, processing status and link. The queue appears once publication jobs exist. Approval without destinations remains a workspace review action.
 7. Inspect the actual provider result. Verify formatting, asset order, account identity and visibility. Record this pilot result before using that account for an ongoing schedule.
 
 Editing an approved draft invalidates its approval and pending jobs. A published destination is preserved even if another destination fails. Duplicate delivered content to make a new post instead of rewriting its history.
 
 ### When delivery is uncertain
 
-A timeout after a send may mean the platform accepted the post but its response was lost. Such a job becomes **Needs reconciliation** and is not automatically resent. Inspect the provider first. For supported read-back services, supply the published post/video identifier in the recovery action; the server checks account ownership, approved text and a plausible publication time before recording success. YouTube also checks the approved title.
+A timeout after a send may mean the platform accepted the post but its response was lost. Such a job shows **Confirmation needed** in the post’s Publishing section and **Check confirmation** in the queue. It is not automatically resent. Inspect the provider first. For supported read-back services, supply the published post/video identifier in the recovery action; the server checks account ownership, approved text and a plausible publication time before recording success. YouTube also checks the approved title.
 
 LinkedIn personal-profile read-back is unavailable under the self-serve permissions used here. Its uncertain sends require manual inspection and operator investigation; the app deliberately does not offer a blind retry that could produce duplicates. Confirmed delivery, provider moderation and public visibility are separate facts.
 
@@ -186,7 +186,7 @@ LinkedIn personal-profile read-back is unavailable under the self-serve permissi
 | Needs attention / expired authorization      | Test access or authorize again; reselect the same account to renew its existing connection. Automatic imports pause for denied or expired permissions. Temporary service/rate-limit errors retry at the configured interval |
 | No report data                               | Verify the property was collecting data during the date range, allow for provider processing/privacy limits, and compare the provider dashboard                                                                             |
 | Approved but not sent                        | Check the destination, schedule, publishing enablement, worker schedule and job error                                                                                                                                       |
-| Needs reconciliation                         | Inspect the provider result before attempting another publication                                                                                                                                                           |
+| Confirmation needed / Check confirmation     | Inspect the provider result before attempting another publication                                                                                                                                                           |
 
 Disconnecting removes that connection's saved local tokens, cancels its pending jobs and removes its saved imported report. It does not revoke the developer application's whole provider-side grant, which may also support other school connections. Full revocation is available from the provider's account-permissions settings.
 

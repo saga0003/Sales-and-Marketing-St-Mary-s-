@@ -12,7 +12,7 @@ A personal setup or password-recovery link works once and expires after 24 hours
 
 After choosing your password, use the normal app URL and your email/password. If a setup link expires before it is used, a manager can generate a replacement in **Settings → Team & access**. A replacement invalidates earlier unused links. Changing a password ends previous sessions; normal sessions also expire and require signing in again.
 
-Vercel hosting protection is separate from the app’s login. The production address is intended for team members to reach the app login, while preview deployment URLs can require Vercel access. Always give colleagues the short production URL above, rather than a long generated deployment URL or temporary Vercel share link.
+Vercel hosting protection is separate from the app’s login. The production address now lets team members reach the app login without a Vercel account. Preview and generated deployment URLs retain Vercel protection. Always give colleagues the short production URL above, rather than a long generated deployment URL or temporary Vercel share link.
 
 ## 2. Where images, videos, and logins are stored
 
@@ -54,12 +54,12 @@ Keep your manager account open in your regular browser. Use a different browser 
 1. Open **Settings → Team & access → Add member** as manager.
 2. Enter a recognizable name such as “Marketing test contributor,” the second email, and the **Contributor** role.
 3. Copy the member’s setup link. Open it in the separate browser and choose a password of at least 12 characters.
-4. In both sessions, open the bell and enable sound if desired. Use the sound test. Browser audio may need a fresh click after a new browser session. Desktop notifications are optional and require browser permission.
-5. As contributor, create a draft, enter a caption, upload an image, and save. Leave **publishing destinations empty** for this internal test. Selecting a planning channel alone is not a publishing destination.
+4. In both sessions, open the bell and enable sound if desired. Enabling sound plays a short confirmation tone. Browser audio may need a fresh click after a new browser session. Desktop notifications are optional and require browser permission.
+5. As contributor, create a draft, enter a working title and caption, upload an image, and save. Leave **publishing destinations empty** for this internal test. Selecting a planning channel alone is not a publishing destination.
 6. Close the editor, reopen the saved draft, and check that the caption and image survived.
 7. Submit it for review. Keep the manager tab visible. Within about 20 seconds, the manager should see an unread inbox item. A previously loaded backlog does not play a burst of sounds on login.
-8. As manager, open the notification, add a comment, and choose **Request changes** with a useful note.
-9. In the contributor session, check the inbox, open the post, make the requested change, and resubmit.
+8. As manager, open the notification. A post still awaiting review opens in **Content → Approvals** with that post selected and its review controls available. Expand **Comments & revision history** to add a comment, then choose **Request changes** with a useful note. If another manager has already decided, the notification opens the current post details instead.
+9. In the contributor session, check the inbox and open the changes-requested notification. Your own draft opens in the editor so you can make the requested change and resubmit. Notifications for posts you cannot currently edit open the post details and history instead.
 10. Approve the revised post as manager. The contributor receives the decision. Check the approved revision and the saved history.
 11. Change approved content as manager. Confirm that approval is cleared and a fresh review is required.
 12. Reload both sessions. Saved posts and notification read/unread states should remain. Deactivate the test member when finished; their saved work and review history are retained.
@@ -68,7 +68,7 @@ Keep your manager account open in your regular browser. Use a different browser 
 
 ### If no sound or popup appears
 
-Notifications are stored even if sound is off. Check the bell first. The actor does not receive a duplicate notification for their own action, so use the two-account test above. Sound must be enabled in the browser, and operating-system/browser settings can mute it. Desktop notifications depend on browser support and permission. This release checks while the workspace is open; it does not provide closed-browser web push or notification emails. Browser background throttling can delay alerts.
+Notifications are stored even if sound is off. Check the bell first. New actions create inbox entries; reviews completed before this release remain in post history and are not backfilled into the new inbox. The actor does not receive a duplicate notification for their own action, so use the two-account test above. Sound must be enabled in the browser, and operating-system/browser settings can mute it. Checks run about every 20 seconds while the workspace is visible and refresh when you return. Hidden or minimized tabs do not keep polling. A focused workspace uses in-app alerts; desktop popups are attempted only when permission is granted and the workspace is not focused. Desktop notifications also depend on browser support. This release does not provide closed-browser web push or notification emails.
 
 ## 5. Draft, review, and publish
 
@@ -141,6 +141,8 @@ Reports retain dates, currency where applicable, and import timestamps. Reach an
 
 In **Intelligence**, add a recommended official source or configure a saved source’s feed/notice page. Active watches are persistent. A scheduled sweep runs every 15 minutes, processes a bounded number of due watches, and respects each watch’s own interval (at least six hours). You can also run a check manually, subject to its cooldown.
 
+The live workspace already has watches for **CBSE, CISCE, NMC, MCC undergraduate current events, and NTA**, each with a 12-hour interval. The initial verified collections contain 80 CBSE links, 12 CISCE links, six NMC links, and 12 MCC links: **110 baseline items**. NTA's homepage is reachable, but its current scan extracts no usable notice items. Keep checking NTA manually until a suitable feed or notice adapter is verified. A successful check with zero items does not prove that no new announcement exists.
+
 The first successful scan is labelled a **baseline**: the system found these items, but does not claim they were just announced. Later scans detect new links/items and meaningful changes. Errors and blocked sources remain visible; they do not erase earlier notices. Supported readers use public RSS/Atom feeds and notice-link HTML. They do not solve CAPTCHAs, sign in to scrape a website, or parse every linked PDF.
 
 For medical seats and new colleges, a notice is evidence to investigate. Verify the academic year, course, state, institution, sanctioned intake versus approval/proposal status, and official effective date before making a promotional claim. The system does not invent a national seat total from a headline.
@@ -161,7 +163,7 @@ See the [intelligence guide](INTELLIGENCE-GUIDE.md) for source setup, correction
 
 **Owned-site checks:** add the school’s HTTPS website origin, install its displayed verification file or meta tag, verify ownership, and audit a page. The report inspects returned HTML for title, description, canonical URL, headings, image alt attributes, links, robots directives, and structured-data types. It is a bounded page audit, not a JavaScript-rendering crawler or a guarantee of search rankings. Search Console provides separate search-performance evidence.
 
-**Answer visibility:** create repeatable prompts with institution, language, locale, intent, and target page. Record an actual answer, provider/model, date, mentions, citations, and evidence. These are reproducible observations. This release does not run paid ChatGPT/Gemini searches in the background or manufacture a universal GEO ranking score. A ChatGPT subscription does not automatically supply API access for this application.
+**Answer visibility:** create repeatable prompts with institution, language, locale, intent, and target page. Record an actual answer, provider/model, date, mentions, citations, and evidence. These are reproducible observations. This release does not run paid ChatGPT/Gemini searches in the background or manufacture a universal GEO ranking score. A ChatGPT subscription does not automatically configure API access for this application. [ChatGPT and API billing are separate](https://help.openai.com/en/articles/9039756-managing-billing-for-chatgpt-and-the-api-platform); any eligible credits still need to be linked and configured for the API organization.
 
 **Documents:** create paragraphs, headings, bullet items, checklist items, and quotations; reorder them and save. History shows earlier saved versions. Restoring an older version creates a new saved version. If someone else saves while you are editing, compare versions and decide what to keep; the app does not silently overwrite their changes. This is shared block editing with conflict protection, not simultaneous character-by-character collaboration.
 

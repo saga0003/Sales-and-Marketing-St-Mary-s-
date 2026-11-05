@@ -22,6 +22,7 @@ import { useWorkspace } from '../lib/workspace';
 import type {
   NotificationInbox,
   NotificationPreferences,
+  Post,
   WorkspaceNotification,
 } from '../lib/types';
 import { formatDate } from '../lib/utils';
@@ -341,18 +342,38 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     await markRead(item.id);
     const current = latest.current;
     if (item.entityType === 'post' || item.entityType === 'publication') {
+      let post: Post | undefined;
       try {
-        const post = await request<import('../lib/types').Post>(
-          `/posts/${encodeURIComponent(item.entityId)}`,
-        );
+        post = await request<Post>(`/posts/${encodeURIComponent(item.entityId)}`);
+      } catch {
+        post = current.data.posts.find((candidate) => candidate.id === item.entityId);
+      }
+      if (!post) {
+        current.navigate('content');
+        toast('This post is no longer available. Open Content to see current work.', 'info');
+        return;
+      }
+      const editingOwnDraft =
+        current.data.user.role === 'contributor' &&
+        current.data.user.id === post.ownerId &&
+        ['draft', 'changes_requested', 'rejected'].includes(post.status);
+      if (editingOwnDraft) {
         current.navigate('content');
         current.openComposer(post);
-      } catch {
-        const post = current.data.posts.find((candidate) => candidate.id === item.entityId);
-        current.navigate('content');
-        if (post) current.openComposer(post);
-        else toast('This post is no longer available. Open Content to see current work.', 'info');
+        return;
       }
+      try {
+        await current.refreshWorkspace();
+      } catch {
+        toast('This post could not be refreshed. Try opening the notification again.', 'error');
+        return;
+      }
+      const tab =
+        current.data.user.role === 'manager' && post.status === 'in_review'
+          ? 'approvals'
+          : 'library';
+      current.navigate('content');
+      window.location.hash = `content?tab=${tab}&post=${encodeURIComponent(post.id)}`;
     } else if (item.entityType === 'document') {
       await current.refreshWorkspace().catch(() => {});
       current.navigate('workspace');
