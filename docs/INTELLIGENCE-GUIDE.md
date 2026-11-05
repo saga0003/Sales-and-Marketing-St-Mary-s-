@@ -121,7 +121,7 @@ For a source blocked by robots, authentication or JavaScript, confirm that the U
 
 Checked on **5 November 2026**. These pages establish the source locations and platform behavior; they do not make any particular detected announcement verified.
 
-- [NTA notice archive](https://nta.ac.in/NoticeBoardArchive)
+- [NTA homepage and latest notices](https://nta.ac.in/) — the full notice archive exceeds the collector’s 1 MiB document limit; use the current homepage for monitoring.
 - [CBSE examination circulars](https://www.cbse.gov.in/cbsenew/Examination_Circular.html)
 - [CISCE official homepage and latest updates](https://cisce.org/)
 - [NMC public news/notices](https://nmc.org.in/whats-new?type=news)

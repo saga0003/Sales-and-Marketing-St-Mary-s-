@@ -3,12 +3,12 @@
 export const SOURCE_CATALOG = [
   {
     id: 'nta',
-    name: 'National Testing Agency notices',
-    url: 'https://nta.ac.in/NoticeBoardArchive',
+    name: 'National Testing Agency latest notices',
+    url: 'https://nta.ac.in/',
     category: 'Exam update',
     mode: 'html',
     keywords: ['NEET', 'JEE', 'CUET', 'UGC', 'examination', 'admit', 'application', 'result'],
-    note: 'Exam notices and original attachments. Check the examination year and any subsequent correction.',
+    note: 'Current homepage notices and original attachments. The full archive exceeds the collector’s 1 MiB document limit. Check the examination year and any subsequent correction.',
   },
   {
     id: 'cbse',

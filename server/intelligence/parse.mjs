@@ -57,10 +57,16 @@ export function* scanTags(source) {
       cursor = start + 1;
       continue;
     }
+    const tag = matched[2].toLowerCase();
+    // ASP.NET notice pages can carry large hidden view-state inputs. Inputs
+    // provide no interpreted metadata here: skip their complete quoted values
+    // in this linear scan, bounded by the reader's document limit. In particular,
+    // a fake anchor inside a value must never become a separate token.
+    const inertInput = !matched[1] && tag === 'input';
     let index = start + matched[0].length;
     let quote = '';
     for (; index < source.length; index += 1) {
-      if (index - start > 16384)
+      if (!inertInput && index - start > 16384)
         throw new HttpError(
           422,
           'A source markup tag exceeds the reading limit.',
@@ -73,9 +79,14 @@ export function* scanTags(source) {
       else if (char === '>') break;
     }
     if (index >= source.length) return;
-    const tag = matched[2].toLowerCase();
     const end = index + 1;
-    yield { tag, start, end, closing: Boolean(matched[1]), selfClosing: source[index - 1] === '/' };
+    yield {
+      tag,
+      start,
+      end,
+      closing: Boolean(matched[1]),
+      selfClosing: inertInput || source[index - 1] === '/',
+    };
     cursor = end;
     if (!matched[1] && ['script', 'style', 'textarea'].includes(tag)) {
       lowerSource ??= source.toLowerCase();

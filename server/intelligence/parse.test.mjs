@@ -91,6 +91,42 @@ test('malformed or excessive markup is bounded and script/comment links are neve
   );
 });
 
+test('oversized hidden input values are skipped quote-aware without extracting fake links', () => {
+  for (const quote of ['"', "'"]) {
+    const innerQuote = quote === '"' ? "'" : '"';
+    const fake = `<a href=${innerQuote}/fake-exam.pdf${innerQuote}>Fake examination notice</a>`;
+    const source = `<form><INPUT type="hidden" name="__VIEWSTATE" value=${quote}${'A'.repeat(60000)}>${fake}${'B'.repeat(20000)}${quote}>
+      <a href="/real-exam.pdf">Official examination timetable notice</a></form>`;
+    const notices = parseNoticePage(source, 'https://board.example.org/');
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0].url, 'https://board.example.org/real-exam.pdf');
+    assert.equal(notices[0].title, 'Official examination timetable notice');
+  }
+});
+
+test('an unclosed oversized input value does not expose apparent tags inside it', () => {
+  assert.deepEqual(
+    parseNoticePage(
+      `<input type="hidden" value="${'A'.repeat(60000)}<a href='/fake-exam.pdf'>Fake examination notice</a>`,
+      'https://board.example.org/',
+    ),
+    [],
+  );
+});
+
+test('interpreted links and metadata retain the 16 KiB individual-tag limit', () => {
+  for (const tag of ['a', 'meta', 'link']) {
+    assert.throws(
+      () =>
+        parseNoticePage(
+          `<${tag} data-value="${'A'.repeat(17000)}">Examination notice</${tag}>`,
+          'https://board.example.org/',
+        ),
+      { code: 'source_markup_limit' },
+    );
+  }
+});
+
 test('SEO report distinguishes HTML evidence from indexing/ranking claims and accepts decorative empty alt', () => {
   const report = inspectPage(
     {
