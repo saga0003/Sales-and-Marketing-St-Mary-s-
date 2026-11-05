@@ -4,7 +4,7 @@
 
 **Workspace address:** [stmarys-marketing-workspace.vercel.app](https://stmarys-marketing-workspace.vercel.app/)
 
-Use this guide with v0.4. Deployment confirmation and live provider acceptance are recorded separately in the release handoff; this document does not claim that the version has already been deployed or that a social account has been connected.
+Version **0.4.0 is deployed** at the workspace address above. Deployment and validation evidence are recorded in [VALIDATION.md](VALIDATION.md). Social-provider authorization and the user's ChatGPT installation remain separate account-dependent steps; deployment does not mean those accounts have been connected.
 
 ## 1. Start here: what is ready, and what still needs setup
 

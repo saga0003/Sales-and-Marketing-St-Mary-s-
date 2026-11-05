@@ -34,6 +34,7 @@ The UI was exercised through the actual application, with explicitly labelled sy
 
 - Contributor versus owner connection navigation; three shared application groups; missing-configuration state and provider filtering.
 - New ChatGPT and storage/access Settings screens.
+- The new Settings navigation and ChatGPT screen at a real 390 px iframe viewport, with no body-level horizontal overflow.
 - Keyword creation and two dated recorded observations, showing **12 → 8 / Improved 4**. The direct Google API view stayed empty, proving that manual evidence was not presented as an imported Google measurement.
 - Exam creation/reopening, a cited exam research result that remains unverified, and a Commerce pathway with a structured entry route linked to the saved exam.
 - Google Business research request, first evidence baseline and second observation displaying review-count and rating changes with separate observed/recorded times.
@@ -59,6 +60,18 @@ The migration did not copy synthetic local exam, competitor, keyword or career r
 
 ## Deployment acceptance
 
-After deploying the exact release commit, verify the canonical host's release-bearing health response, anonymous API denials, MCP discovery JSON, OAuth callback/registration validation, protected transport challenge, unsigned cron/callback rejection, GitHub CI and deployment runtime errors. A release should not be described as live solely because a build request was submitted.
+The release was deployed and checked on **5 November 2026, approximately 03:49 UTC**:
+
+- Application commit: [`0b59233fd07b0e4ce905be48a1b3602b5c043009`](https://github.com/saga0003/Sales-and-Marketing-St-Mary-s-/commit/0b59233fd07b0e4ce905be48a1b3602b5c043009).
+- Vercel deployment: `dpl_EzUjVciLJpTeYNzp2u3YcAU9moJ3`, **READY**, production target, with the canonical `stmarys-marketing-workspace.vercel.app` alias and the exact application commit above.
+- [GitHub check, test and build run 41963657485](https://github.com/saga0003/Sales-and-Marketing-St-Mary-s-/actions/runs/41963657485) completed successfully.
+- The canonical `/api/health` returned HTTP **200**, `release: "0.4.0"`, `demoMode: false`, and persistent PostgreSQL. The browser loaded the normal work-email/password sign-in screen.
+- Both MCP discovery endpoints returned HTTP **200** with the canonical issuer/resource, PKCE S256 and the three documented scopes.
+- Anonymous MCP transport returned **401** with the protected-resource metadata challenge. Workspace bootstrap, MCP settings and storage information also returned **401** without a session.
+- Unsigned reporting and intelligence cron calls returned **401**. A malformed YouTube subscription challenge returned **422** without accepting a subscription.
+- OAuth registration rejected an off-domain callback with **400**; authorization rejected an unknown client with **400**. No usable client or grant was created by those negative checks.
+- Vercel returned no error/fatal entries for this deployment in the filtered 15-minute window after these checks. That is a release snapshot, not a guarantee of future uptime.
+
+This documentation update follows the application release; it does not change the deployed application code.
 
 Real Google/Meta/LinkedIn consent, an actual Search Console import, a real YouTube hub subscription/delivery and the user's ChatGPT plugin installation still require their corresponding account access or explicit opt-in. No paid API service, OpenAI call, MFA or external social post is part of this validation.
