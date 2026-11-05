@@ -278,6 +278,19 @@ export function parseFeed(document, url, { keywords = [], limit = 80 } = {}) {
       keywords,
     );
     if (entry && !seen.has(entry.key)) {
+      if (/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+        entry.sourceUpdatedAt = dateOrNull(element(source, ['updated']));
+        entry.hasDescription = false;
+        for (const tag of scanTags(source)) {
+          if (
+            !tag.closing &&
+            ['description', 'summary', 'media:description', 'content'].includes(tag.tag)
+          ) {
+            entry.hasDescription = true;
+            break;
+          }
+        }
+      }
       result.push(entry);
       seen.add(entry.key);
     }

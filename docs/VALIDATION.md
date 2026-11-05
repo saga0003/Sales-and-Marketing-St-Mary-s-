@@ -1,89 +1,64 @@
-# Version 0.3 release validation
+# Version 0.4 release validation
 
-Validation date: **5 November 2026**. This release adds readable typography, durable review notifications, structured documents, official-source monitoring, owned-site checks, answer evidence, more account connectors and media formats, and optional scheduled report imports.
+Validation date: **5 November 2026**. The release adds shared provider-app administration, multi-account connection selection, dated competitor research, webpage snapshots, exam/career records, daily keyword tracking, opt-in YouTube push, an authenticated MCP server, and storage/access explanations.
 
-Hosted application: [St. Mary’s Marketing Workspace](https://stmarys-marketing-workspace.vercel.app/).
+Application: [St. Mary's Marketing Workspace](https://stmarys-marketing-workspace.vercel.app/). Current instructions: [V04-USER-GUIDE.md](V04-USER-GUIDE.md). Earlier release evidence is retained in [VALIDATION-V03.md](VALIDATION-V03.md).
 
-## Automated checks
+## Integrated checks
 
-- `npm test`: **110 passing tests**, no failures or skipped tests.
-- `npm run build`: passed, including TypeScript compilation.
-- Global Prettier formatting and `git diff --check`: passed.
-- `npm audit --omit=dev`: zero known production dependency vulnerabilities at the time of the check.
-- GitHub Actions: [source release verification](https://github.com/saga0003/Sales-and-Marketing-St-Mary-s-/actions/runs/41947272730) completed successfully.
+- **160 tests passed**, with no failures or skipped tests.
+- Production build and TypeScript compilation passed.
+- Prettier and whitespace checks passed.
+- `npm audit --omit=dev` reported zero known production dependency vulnerabilities at the time of this check.
+- Large Intelligence, Performance and Settings sections load on demand. The main JavaScript bundle is approximately 437 kB minified / 128 kB gzip; it no longer includes all three sections up front.
 
-The tests use actual HTTP requests against isolated local application databases, controlled provider responses and storage-signature checks. Coverage includes accounts and CSRF, role/ownership permissions, exact-revision approval, concurrent editing, per-user inbox privacy, document conflicts/history, immutable ordered media, MP4 validation, shared upload reservations, provider discovery/reporting, publication recovery, scheduled-import leases, source-fetch safety, source baselines/corrections, SEO ownership and answer evidence.
+These are isolated local tests using real HTTP application endpoints and controlled provider responses. They establish implementation behavior; they do not claim a school provider account has granted access or that a real post has been published.
 
-Provider fixture tests do not establish that a school has completed provider approval or that an actual social post was published. No live Google, Meta or LinkedIn authorization is fabricated by this release.
+## Covered release boundaries
 
-## Real cloud storage check
+| Area                                | Evidence                                                                                                                                                                                                                                                                                                         |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Connection UX and owner permissions | Missing app setup cannot masquerade as consent. The owner configures three application groups; other managers can connect resources but cannot change secrets. Common and legacy callbacks are tested.                                                                                                           |
+| Multiple accounts                   | Atomic multi-selection, separate Page credentials/report identities, stable reconnection IDs, cross-school conflicts and stale selection rejection.                                                                                                                                                              |
+| Keyword tracking                    | Exact property/query/school/filter identity, finalized provider dates, absent-row gaps, daily leases and bounded work, separated manual/MCP evidence, context-specific answer observations.                                                                                                                      |
+| Research and education              | Real public-page baselines/diffs, SSRF/robots/size protections, revisions, source links, baseline semantics, retained failures, source-change invalidation, unverified research and manager-only source review.                                                                                                  |
+| YouTube push                        | Subscription intent/challenge, exact channel/topic, signed raw bytes, delivery size, duplicate/older update rejection, correction handling, opt-in CSRF, renewal and lease fencing.                                                                                                                              |
+| MCP                                 | Discovery, callback allowlist, encrypted client secrets, short abandoned registrations, first-login consent return, CSRF/session binding, PKCE, client/resource/redirect binding, scopes, token rotation/replay, revocation/deactivation, idempotent writes, no publish/approve tools, private report isolation. |
+| Existing workflows                  | Team/login/recovery, content revision and review, publication reconciliation, notification privacy, media/video reservations, structured documents and current provider adapters.                                                                                                                                |
 
-The existing narrow Supabase media broker was updated while retaining its own Ed25519 request authentication and private bucket. The real cloud check confirmed:
+MCP draft/result notifications also reach the requesting manager once. A duplicate write retry does not duplicate the draft or its notification. A bearer token for MCP cannot access ordinary team-administration routes.
 
-| Boundary                                    | Observed result                                                     |
-| ------------------------------------------- | ------------------------------------------------------------------- |
-| Bucket initialization                       | Private, with 40 MiB video allowance and JPEG/MP4 MIME restrictions |
-| Unsigned broker request                     | HTTP 401                                                            |
-| Signed direct MP4 upload                    | HTTP 200                                                            |
-| Reuse of upload link to overwrite an object | Rejected with HTTP 400                                              |
-| Signed video download                       | SHA-256 matched the original fixture bytes                          |
-| Test cleanup                                | The disposable video object was removed                             |
+## Browser checks in the isolated demo
 
-Image normalization still accepts at most 3 MiB input. A video must pass application validation before becoming an approved asset; a successful raw storage upload alone is insufficient.
+The UI was exercised through the actual application, with explicitly labelled synthetic local test records:
 
-## Browser and visual checks
+- Contributor versus owner connection navigation; three shared application groups; missing-configuration state and provider filtering.
+- New ChatGPT and storage/access Settings screens.
+- Keyword creation and two dated recorded observations, showing **12 → 8 / Improved 4**. The direct Google API view stayed empty, proving that manual evidence was not presented as an imported Google measurement.
+- Exam creation/reopening, a cited exam research result that remains unverified, and a Commerce pathway with a structured entry route linked to the saved exam.
+- Google Business research request, first evidence baseline and second observation displaying review-count and rating changes with separate observed/recorded times.
 
-The actual app ran in an isolated local sample workspace through the managed browser preview. Checks included notification opening/preferences, saved document blocks/checklists, version history, composer behavior and monitoring interfaces. The supplied violet/navy visual direction is retained.
+The keyword screenshot is a synthetic UI test, not a measurement of the school's rank: [v0.4 keyword interface](images/v04-keyword-demo.jpg).
 
-A final notification navigation check used two roles and a different starting school filter. The manager's submission alert opened the exact post in Approvals with review controls. After requesting changes, the older alert opened the post's current details; the contributor's changes-requested alert opened an enabled editor for revision and resubmission. This was a real local browser workflow, not a simulated click test against a mocked component.
+Browser review found and fixed two concrete integration issues: first-time login discarded MCP consent state, and an observation form used `randomUUID()` in an HTTP-only development preview. The validated internal consent return now survives login, and retry keys use `getRandomValues()`.
 
-At **320 CSS pixels**, the main navigation uses two columns and Performance tabs wrap. The tested inner viewport measured 305 pixels after its scrollbar, with equal client and scroll widths. The notification panel fits that narrow viewport. A 390-pixel layout was also reviewed.
+## Hosted database migration
 
-An enlarged layout was reviewed with a 674-pixel iframe rendered at twice its size. This was an explicit layout simulation; it was **not** a successful native-browser 200% zoom test. A formal accessibility audit, screen-reader coverage and native mobile/Safari uploads remain acceptance work.
+The additive migration was applied to Supabase project `zqmngsghinrxnqcwkdkt` in the private `smis_marketing` schema:
 
-## Hosted release checks
+- Core schema **4**; provider extension **2**; keyword schema **1**; additive intelligence extension **3**.
+- The legacy intelligence marker remains **1** so the previous release can continue during rollout or rollback.
+- All **57** private-schema tables are owned by `smis_marketing_app`.
+- `anon` and `authenticated` have no usage permission on this schema.
+- Supabase's security advisor returned no findings after migration.
+- Hash comparisons of all existing users, posts, media records and documents matched before/after the upgrade. Existing counts remain 4 user records (2 active), 2 posts, 3 committed media records and 1 document, including the retained inactive QA data described in the prior validation report.
+- All 5 existing source watches and 110 collected notice records remain.
+- The existing live health endpoint remained HTTP 200 on persistent PostgreSQL after the migration, before the new code deployment.
 
-The code release was built and promoted on the existing Vercel project. Production uses core schema version 3, provider extension version 2 and intelligence version 1. All 35 private-schema tables are owned by the restricted application role. The `anon` and `authenticated` Data API roles have no schema usage; the Supabase security advisor returned no findings.
+The migration did not copy synthetic local exam, competitor, keyword or career records into production. It enabled no provider connection or YouTube subscription. Current media storage remained 5 physical objects / 235,472 bytes; database size after schema creation was approximately 14.2 MB.
 
-**41 hosted acceptance checks passed** through the actual Vercel HTTP API and Supabase storage, using two disposable workspace accounts:
+## Deployment acceptance
 
-| Workflow                    | Observed result                                                                                                             |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Public login and API health | Normal staff login loads; health confirms persistent PostgreSQL                                                             |
-| Anonymous access            | Workspace bootstrap returns HTTP 401                                                                                        |
-| Test email setup            | Manager creates a private contributor setup link; activation succeeds; replay returns HTTP 400                              |
-| Permissions                 | Contributor cannot create users or mark the manager's notification read                                                     |
-| Image-backed draft          | Saved, reloaded, submitted, revised and approved with no publishing destination                                             |
-| Review notifications        | Manager receives submission; contributor receives change-request feedback and approval                                      |
-| Preferences and read state  | Sound preference persists and individual notification read marking succeeds                                                 |
-| Exact review revision       | Revised draft becomes revision 2; manager approval records revision 2                                                       |
-| External publishing         | No publication job is created for the internal test                                                                         |
-| Shared document             | Structured version 1 saves, teammate saves version 2, stale overwrite returns HTTP 409 and both versions remain in history  |
-| Private video               | Signed MP4 upload commits after validation; completion is idempotent; authorized temporary delivery matches the stored hash |
-| Scheduled workers           | All three unsigned cron routes return HTTP 401; all three authorized bounded invocations return HTTP 200                    |
-| Existing media              | The user's pre-release private image remains readable and its SHA-256 is unchanged                                          |
-| Providers                   | All ten services are visible with honest unconfigured states; no account is shown as connected                              |
+After deploying the exact release commit, verify the canonical host's release-bearing health response, anonymous API denials, MCP discovery JSON, OAuth callback/registration validation, protected transport challenge, unsigned cron/callback rejection, GitHub CI and deployment runtime errors. A release should not be described as live solely because a build request was submitted.
 
-Browser inspection of the hosted canonical URL also confirmed the school's own sign-in form, with no Vercel account wall. The actual email/password inputs render at 16px with 24px line height; labels render at 14px. See [hosted login](images/v03-hosted-login.jpg) and [local narrow inbox](images/v03-mobile-inbox.jpg). The latter uses an isolated sample workspace.
-
-Vercel Standard Protection covers preview/generated deployment URLs; the canonical production URL reaches the application's own authentication. No provider account was authorized, no social post was sent and no advertising changes were made during validation.
-
-A pre-upgrade record snapshot was taken for the rollout. The original account, post and media fingerprints matched after migration. This rollout snapshot is not a substitute for an ongoing managed backup and restore procedure.
-
-The two disposable QA accounts have been **deactivated**, and a final database check confirmed that the two original accounts, original post and original media fingerprints are unchanged. There are no publication jobs. Permanent removal of the labelled QA records required a database-service confirmation that expired before completion, so the test post, document and uploads remain retained. Their inactive accounts cannot sign in; those records are not evidence of real school activity.
-
-## Official-source rollout
-
-Five active official-source watches were added through the authenticated manager API: NTA, CBSE, CISCE, NMC and MCC undergraduate current events. Four collectors produced **110 baseline links**: 80 from CBSE, 12 from CISCE, six from NMC and 12 from MCC. The NMC items include actual seat-matrix and new-college application notice links, not invented seat totals. All initial findings are labelled **Baseline**; they are not represented as newly published today.
-
-NTA's current-notices homepage is reachable and the final hosted check completed without a reader error, but it extracted **zero usable notice items**. Its watch is configured; useful automatic NTA collection is not yet verified. Continue checking the official NTA website manually until a suitable feed or notice adapter is validated. Do not interpret a successful fetch with zero items as proof that no new announcement exists.
-
-The live checks identified compressed responses and oversized inert HTML metadata. The reader now streams gzip, deflate and Brotli with independent encoded/decoded limits and scans complete tag boundaries without interpreting attributes from tags over 16 KiB. Regressions cover fake nested anchors and oversized ownership challenges. The one-MiB document budget, deadlines, robots rules and DNS protections remain in place.
-
-## Provider acceptance still required
-
-For each desired service, configure the school's developer application, grant eligible access and select the intended resource. Compare a small report period with the provider. Approve one deliberately chosen live test per publishing format, inspect its remote ID and actual result, and verify recovery behavior before depending on scheduled publishing.
-
-Google Ads and Meta Ads are reporting only. Other social competitor profiles remain manual when no authorized API is implemented. AEO/GEO entries are observations entered by the team, not an automated universal rank. Notice-page detection does not parse every PDF or verify a medical-seat claim.
-
-See [USER-GUIDE.md](USER-GUIDE.md), [CONNECTING-ACCOUNTS.md](CONNECTING-ACCOUNTS.md), [INTELLIGENCE-GUIDE.md](INTELLIGENCE-GUIDE.md), and [ROADMAP.md](ROADMAP.md).
+Real Google/Meta/LinkedIn consent, an actual Search Console import, a real YouTube hub subscription/delivery and the user's ChatGPT plugin installation still require their corresponding account access or explicit opt-in. No paid API service, OpenAI call, MFA or external social post is part of this validation.

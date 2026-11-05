@@ -5,6 +5,7 @@ import type { Post, View, WorkspaceData } from './types';
 import { institutions } from './types';
 import { errorMessage } from './utils';
 import { Button } from '../components/UI';
+import { postLoginDestination } from './auth-return';
 
 export class WorkspaceRequestError extends Error {
   constructor(
@@ -232,13 +233,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       <Login
         setupToken={setupToken}
         onSuccess={async () => {
+          const destination = postLoginDestination(window.location.hash);
           window.history.replaceState(
             null,
             '',
-            `${window.location.pathname}${window.location.search}#overview`,
+            `${window.location.pathname}${window.location.search}${destination.hash}`,
           );
           setSetupToken('');
-          setView('overview');
+          setView(destination.view);
           await refresh();
         }}
       />

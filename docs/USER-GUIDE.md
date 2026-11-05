@@ -1,5 +1,7 @@
 # St. Mary’s Marketing Workspace — user guide
 
+> **For v0.4, use the [current user guide](V04-USER-GUIDE.md).** It covers the revised connection flow, multiple accounts, competitor research, exams and careers, keyword charts, ChatGPT MCP, storage and the 15-minute test. This document preserves the earlier v0.3 workflow; the v0.4 guide takes precedence where behavior differs.
+
 Version 0.3 · 5 November 2026
 
 **Open the app:** [stmarys-marketing-workspace.vercel.app](https://stmarys-marketing-workspace.vercel.app/)

@@ -403,9 +403,7 @@ async function fixture(t, overrides = {}) {
     });
     assert.equal(auth.status, 200, JSON.stringify(auth.body));
     const state = new URL(auth.body.url).searchParams.get('state');
-    const finished = await request(
-      `/api/connections/oauth/${provider}/callback?state=${state}&code=code`,
-    );
+    const finished = await request(`/api/connections/oauth/callback?state=${state}&code=code`);
     assert.equal(finished.status, 303);
     const id = new URLSearchParams(finished.headers.get('location').split('?')[1]).get('connected');
     assert.ok(id, finished.headers.get('location'));
@@ -489,6 +487,370 @@ async function fixture(t, overrides = {}) {
     },
   };
 }
+
+async function pendingConnection(f, provider = 'instagram', institution = 'St. Mary’s ISC') {
+  const auth = await f.request('/api/connections/authorize', {
+    method: 'POST',
+    body: { provider, institution },
+  });
+  assert.equal(auth.status, 200, JSON.stringify(auth.body));
+  const state = new URL(auth.body.url).searchParams.get('state');
+  const completed = await f.request(`/api/connections/oauth/callback?state=${state}&code=code`);
+  assert.equal(completed.status, 303);
+  const id = new URLSearchParams(completed.headers.get('location').split('?')[1]).get('connected');
+  assert.ok(id, completed.headers.get('location'));
+  return { id, state };
+}
+
+test('shared application administration is owner-only while another manager can authorize accounts', async (t) => {
+  const f = await fixture(t);
+  const owner = (await f.request('/api/bootstrap')).body.user;
+  await f.db
+    .prepare(
+      "INSERT INTO workspace_metadata(key,value) VALUES ('workspace_owner_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    )
+    .run(owner.id);
+  const configured = await f.request('/api/connections/applications/meta', {
+    method: 'PUT',
+    body: { clientId: 'APP_ID', clientSecret: 'SUPER_SECRET_APP' },
+  });
+  assert.equal(configured.status, 200, JSON.stringify(configured.body));
+  const catalog = await f.request('/api/connections/applications');
+  assert.equal(catalog.body.applications.length, 3);
+  assert.equal(catalog.body.redirectUri, 'http://localhost:5173/api/connections/oauth/callback');
+  assert.deepEqual(
+    catalog.body.applications.find((item) => item.id === 'meta').services.map((item) => item.id),
+    ['instagram', 'facebook', 'meta_ads'],
+  );
+  assert.ok(!JSON.stringify(catalog.body).includes('SUPER_SECRET_APP'));
+  const created = await f.request('/api/users', {
+    method: 'POST',
+    body: {
+      name: 'Second manager',
+      email: 'second-manager@example.test',
+      role: 'manager',
+      password: 'Test-only-manager-password-123',
+    },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(
+    (
+      await f.request('/api/auth/login', {
+        method: 'POST',
+        body: { email: 'second-manager@example.test', password: 'Test-only-manager-password-123' },
+      })
+    ).status,
+    200,
+  );
+  const normal = await f.request('/api/connections');
+  assert.equal(normal.body.applicationAdministration.isOwner, false);
+  assert.ok(normal.body.providers.every((item) => !item.canConfigure));
+  assert.ok(
+    normal.body.providers
+      .filter((item) => item.credentialGroup === 'meta')
+      .every((item) => item.configured),
+  );
+  assert.equal((await f.request('/api/connections/applications')).status, 403);
+  for (const path of ['/api/connections/applications/meta', '/api/connections/providers/instagram'])
+    assert.equal(
+      (
+        await f.request(path, {
+          method: 'PUT',
+          body: { clientSecret: 'Replacement-secret-denied' },
+        })
+      ).status,
+      403,
+    );
+  assert.equal(
+    (
+      await f.request('/api/connections/authorize', {
+        method: 'POST',
+        body: { provider: 'facebook', institution: 'St. Mary’s ISC' },
+      })
+    ).status,
+    200,
+  );
+  await f.db.prepare('UPDATE users SET active=0 WHERE id=?').run(owner.id);
+  assert.equal(
+    (await f.request('/api/connections/applications')).status,
+    403,
+    'An inactive owner must not silently promote another manager.',
+  );
+});
+
+test('new authorizations share one exact callback and legacy pending callbacks remain valid', async (t) => {
+  const f = await fixture(t);
+  await f.request('/api/connections/applications/google', {
+    method: 'PUT',
+    body: { clientId: 'APP_ID', clientSecret: 'SUPER_SECRET_APP' },
+  });
+  const exchanged = [];
+  f.fake.authorize = (id, _credentials, uri, state) =>
+    `https://accounts.example/${id}?state=${state}&redirect_uri=${encodeURIComponent(uri)}`;
+  f.fake.exchange = async (id, _credentials, uri) => {
+    exchanged.push({ id, uri });
+    return { accessToken: 'SECRET_ACCESS', refreshToken: 'SECRET_REFRESH' };
+  };
+  const fresh = await f.request('/api/connections/authorize', {
+    method: 'POST',
+    body: { provider: 'youtube', institution: 'St. Mary’s ISC' },
+  });
+  const url = new URL(fresh.body.url),
+    state = url.searchParams.get('state');
+  assert.equal(
+    url.searchParams.get('redirect_uri'),
+    'http://localhost:5173/api/connections/oauth/callback',
+  );
+  const wrongRoute = await f.request(
+    `/api/connections/oauth/youtube/callback?state=${state}&code=code`,
+  );
+  assert.match(wrongRoute.headers.get('location'), /oauth_callback_mismatch/);
+  assert.equal(
+    (await f.db.prepare('SELECT COUNT(*) AS count FROM oauth_authorizations').get()).count,
+    1,
+    'Wrong callback must not consume the valid state.',
+  );
+  const complete = await f.request(
+    `/api/connections/oauth/callback?state=${state}&code=code&provider=instagram`,
+  );
+  assert.match(complete.headers.get('location'), /connected=/);
+  assert.deepEqual(exchanged[0], {
+    id: 'youtube',
+    uri: 'http://localhost:5173/api/connections/oauth/callback',
+  });
+  const legacy = await f.request('/api/connections/authorize', {
+    method: 'POST',
+    body: { provider: 'search_console', institution: 'St. Mary’s ISC' },
+  });
+  const oldState = new URL(legacy.body.url).searchParams.get('state');
+  const vault = createVault(Buffer.alloc(32, 7));
+  const pending = await f.db
+    .prepare('SELECT * FROM oauth_authorizations WHERE state_hash=?')
+    .get(hash(oldState));
+  const saved = vault.open(pending.encrypted_verifier, `oauth:${pending.state_hash}`);
+  delete saved.redirectUri;
+  await f.db
+    .prepare('UPDATE oauth_authorizations SET encrypted_verifier=? WHERE state_hash=?')
+    .run(vault.seal(saved, `oauth:${pending.state_hash}`), pending.state_hash);
+  const oldComplete = await f.request(
+    `/api/connections/oauth/search_console/callback?state=${oldState}&code=code`,
+  );
+  assert.match(oldComplete.headers.get('location'), /connected=/);
+  assert.deepEqual(exchanged[1], {
+    id: 'search_console',
+    uri: 'http://localhost:5173/api/connections/oauth/search_console/callback',
+  });
+});
+
+test('one authorization selects multiple Pages with isolated credentials, reports, and stable renewed identities', async (t) => {
+  const f = await fixture(t);
+  const resources = [
+    {
+      id: '100',
+      name: 'School Page A',
+      kind: 'facebook',
+      pageId: '100',
+      pageAccessToken: 'SECRET_PAGE_A',
+    },
+    {
+      id: '200',
+      name: 'School Page B',
+      kind: 'facebook',
+      pageId: '200',
+      pageAccessToken: 'SECRET_PAGE_B',
+    },
+  ];
+  f.fake.discover = async (_provider, current) => {
+    assert.equal(current.pageAccessToken, undefined);
+    return resources;
+  };
+  f.fake.platformReport = async (_provider, accountId, current) => {
+    assert.equal(current.pageAccessToken, accountId === '100' ? 'SECRET_PAGE_A' : 'SECRET_PAGE_B');
+    return {
+      summary: [{ key: 'reach', label: 'Reach', value: Number(accountId), unit: 'count' }],
+      tables: [],
+      notes: [],
+    };
+  };
+  const original = await f.connect('facebook');
+  const selected = await f.request(`/api/connections/${original.id}/select-many`, {
+    method: 'POST',
+    body: { accountIds: ['100', '200'] },
+  });
+  assert.equal(selected.status, 200, JSON.stringify(selected.body));
+  const [first, second] = selected.body.connections;
+  assert.equal(first.id, original.id);
+  assert.notEqual(first.id, second.id);
+  for (const connection of [first, second]) {
+    const synced = await f.request(`/api/connections/${connection.id}/sync`, {
+      method: 'POST',
+      body: {},
+    });
+    assert.equal(synced.status, 200, JSON.stringify(synced.body));
+    assert.equal(synced.body.summary[0].value, Number(connection.accountId));
+    assert.equal(synced.body.connectionId, connection.id);
+    assert.ok(!JSON.stringify(synced.body).includes('SECRET'));
+  }
+  const pending = await pendingConnection(f, 'facebook');
+  const renewed = await f.request(`/api/connections/${pending.id}/select-many`, {
+    method: 'POST',
+    body: { accountIds: ['100', '200'] },
+  });
+  assert.equal(renewed.status, 200, JSON.stringify(renewed.body));
+  assert.deepEqual(
+    renewed.body.connections.map((item) => item.id),
+    [first.id, second.id],
+  );
+  assert.equal(
+    (await f.db.prepare('SELECT status FROM service_connections WHERE id=?').get(pending.id))
+      .status,
+    'disconnected',
+  );
+  assert.equal((await f.request('/api/bootstrap')).body.platformAnalytics.length, 2);
+  assert.equal(
+    (await f.request(`/api/connections/${second.id}`, { method: 'DELETE' })).status,
+    200,
+  );
+  const after = (await f.request('/api/bootstrap')).body;
+  assert.equal(after.platformAnalytics.length, 1);
+  assert.equal(after.platformAnalytics[0].connectionId, first.id);
+  assert.ok(after.connections.some((item) => item.id === first.id && item.status === 'connected'));
+});
+
+test('multiple account selection is atomic across school conflicts and stale discovery', async (t) => {
+  const f = await fixture(t);
+  let resources = [
+    { id: 'properties/1', name: 'School website', kind: 'ga4' },
+    { id: 'properties/2', name: 'New website', kind: 'ga4' },
+  ];
+  f.fake.discover = async () => resources;
+  const first = await f.connect('google');
+  const original = await f.db
+    .prepare('SELECT encrypted_credentials FROM service_connections WHERE id=?')
+    .get(first.id);
+  const pending = await pendingConnection(f, 'google', 'St. Mary’s ICSE');
+  const conflict = await f.request(`/api/connections/${pending.id}/select-many`, {
+    method: 'POST',
+    body: { accountIds: ['properties/2', 'properties/1'] },
+  });
+  assert.equal(conflict.status, 409, JSON.stringify(conflict.body));
+  assert.equal(conflict.body.code, 'account_already_connected');
+  assert.equal(
+    (
+      await f.db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM service_connections WHERE account_id='properties/2'",
+        )
+        .get()
+    ).count,
+    0,
+  );
+  assert.equal(
+    (
+      await f.db
+        .prepare('SELECT encrypted_credentials FROM service_connections WHERE id=?')
+        .get(first.id)
+    ).encrypted_credentials,
+    original.encrypted_credentials,
+  );
+  const choices = (await f.request(`/api/connections/${pending.id}/accounts`)).body.accounts;
+  assert.equal(
+    choices.find((item) => item.id === 'properties/1').connectedInstitution,
+    'St. Mary’s ISC',
+  );
+  resources = [resources[0]];
+  const stale = await f.request(`/api/connections/${pending.id}/select-many`, {
+    method: 'POST',
+    body: { accountIds: ['properties/2'] },
+  });
+  assert.equal(stale.status, 422);
+  assert.equal(stale.body.code, 'invalid_account');
+  assert.equal(
+    (await f.db.prepare('SELECT status FROM service_connections WHERE id=?').get(pending.id))
+      .status,
+    'awaiting_selection',
+  );
+  assert.equal(
+    (
+      await f.request(`/api/connections/${first.id}/select`, {
+        method: 'POST',
+        body: { accountId: 'properties/2' },
+      })
+    ).body.code,
+    'account_immutable',
+  );
+});
+
+test('account selection rejects authorization changed during discovery before persisting any resource', async (t) => {
+  const f = await fixture(t);
+  await f.request('/api/connections/applications/google', {
+    method: 'PUT',
+    body: { clientId: 'APP_ID', clientSecret: 'SUPER_SECRET_APP' },
+  });
+  const pending = await pendingConnection(f, 'google');
+  const vault = createVault(Buffer.alloc(32, 7));
+  f.fake.discover = async () => {
+    await f.db
+      .prepare('UPDATE service_connections SET encrypted_credentials=? WHERE id=?')
+      .run(
+        vault.seal({ accessToken: 'OTHER_AUTHORIZATION' }, `connection:${pending.id}`),
+        pending.id,
+      );
+    return [{ id: 'properties/1', name: 'Website', kind: 'ga4' }];
+  };
+  const result = await f.request(`/api/connections/${pending.id}/select-many`, {
+    method: 'POST',
+    body: { accountIds: ['properties/1'] },
+  });
+  assert.equal(result.status, 409, JSON.stringify(result.body));
+  assert.equal(result.body.code, 'connection_changed');
+  assert.equal(
+    (await f.db.prepare('SELECT account_id FROM service_connections WHERE id=?').get(pending.id))
+      .account_id,
+    null,
+  );
+});
+
+test('internal Search Console access pins provider, school, property, capability and connection health', async (t) => {
+  const f = await fixture(t);
+  f.fake.discover = async () => [
+    { id: 'sc-domain:school.example', name: 'School search', kind: 'search_console' },
+  ];
+  const connection = await f.connect('search_console');
+  const expected = { accountId: connection.accountId, institution: connection.institution };
+  let calls = 0;
+  const callback = (row, current, app) => {
+    calls++;
+    assert.equal(row.account_id, expected.accountId);
+    assert.equal(current.accessToken, 'SECRET_ACCESS');
+    assert.equal(app.clientId, 'APP_ID');
+    return { count: 1 };
+  };
+  assert.deepEqual(await f.extensions.withSearchConsole(connection.id, expected, callback), {
+    count: 1,
+  });
+  for (const mismatch of [
+    { ...expected, institution: 'Other school' },
+    { ...expected, accountId: 'sc-domain:other.example' },
+    undefined,
+  ])
+    await assert.rejects(() => f.extensions.withSearchConsole(connection.id, mismatch, callback), {
+      code: 'search_connection_mismatch',
+    });
+  await f.db
+    .prepare("UPDATE service_connections SET status='needs_attention' WHERE id=?")
+    .run(connection.id);
+  await assert.rejects(() => f.extensions.withSearchConsole(connection.id, expected, callback), {
+    code: 'search_connection_mismatch',
+  });
+  await f.db
+    .prepare("UPDATE service_connections SET status='connected', capabilities='[]' WHERE id=?")
+    .run(connection.id);
+  await assert.rejects(() => f.extensions.withSearchConsole(connection.id, expected, callback), {
+    code: 'search_connection_mismatch',
+  });
+  assert.equal(calls, 1);
+});
 
 test('shared developer credentials configure sibling services and partial updates do not expose secrets', async (t) => {
   const f = await fixture(t);

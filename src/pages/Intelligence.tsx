@@ -8,7 +8,10 @@ import {
   ChevronRight,
   ExternalLink,
   FileCheck2,
+  FileSearch,
   Globe2,
+  GraduationCap,
+  History,
   Lightbulb,
   Newspaper,
   Radio,
@@ -26,13 +29,23 @@ import type { Competitor, Opportunity, Platform, Source } from '../lib/types';
 import { Badge, Button, Modal, PlatformIcon } from '../components/UI';
 import '../styles/intelligence.css';
 import Monitoring, { WatchConfigModal, type WatchTarget } from '../components/Monitoring';
+import CompetitorResearch, {
+  researchResultMessage,
+  type ResearchFocus,
+} from '../components/CompetitorResearch';
+import EducationHub from '../components/EducationHub';
+import type { ResearchNowResult } from '../components/intelligence-v4-types';
 
-type ResearchTab = 'monitoring' | 'discover' | 'competitors' | 'sources';
+type ResearchTab = 'monitoring' | 'research' | 'education' | 'discover' | 'competitors' | 'sources';
 const readResearchTab = (): ResearchTab => {
   const value = new URLSearchParams(window.location.hash.split('?')[1]).get('tab');
   return value === 'opportunities'
     ? 'discover'
-    : value === 'discover' || value === 'competitors' || value === 'sources'
+    : value === 'discover' ||
+        value === 'competitors' ||
+        value === 'sources' ||
+        value === 'research' ||
+        value === 'education'
       ? value
       : 'monitoring';
 };
@@ -125,6 +138,7 @@ export default function Intelligence() {
   const { data, mutate, toast, navigate } = useWorkspace();
   const [tab, setTab] = useState<ResearchTab>(readResearchTab);
   const [watchTarget, setWatchTarget] = useState<WatchTarget | null>(null);
+  const [researchFocus, setResearchFocus] = useState<ResearchFocus | undefined>();
   useEffect(() => {
     const changed = () => setTab(readResearchTab());
     window.addEventListener('hashchange', changed);
@@ -191,6 +205,28 @@ export default function Intelligence() {
       error instanceof Error ? error.message : 'Something went wrong. Please try again.',
       'error',
     );
+  }
+
+  async function researchCompetitor(item: Competitor) {
+    if (busy) return;
+    setBusy(`research-${item.id}`);
+    try {
+      const result = await mutate<ResearchNowResult>(
+        `/intelligence/competitors/${encodeURIComponent(item.id)}/research`,
+        'POST',
+        {},
+      );
+      toast(researchResultMessage(result));
+      setResearchFocus({
+        competitorId: item.id,
+        ...(result.request ? { requestId: result.request.id } : {}),
+      });
+      changeTab(result.mode === 'youtube' ? 'monitoring' : 'research');
+    } catch (error) {
+      reportError(error);
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function updateOpportunity(
@@ -274,7 +310,7 @@ export default function Intelligence() {
             <Plus size={17} />
             Add research brief
           </Button>
-        ) : (
+        ) : tab === 'competitors' || tab === 'sources' ? (
           <Button
             variant="primary"
             onClick={() => setEditor({ kind: tab === 'sources' ? 'source' : 'competitor' })}
@@ -282,7 +318,7 @@ export default function Intelligence() {
             <Plus size={17} aria-hidden="true" />
             Add {tab === 'sources' ? 'source' : 'competitor'}
           </Button>
-        )}
+        ) : null}
       </div>
 
       <div className="int-tabs-row">
@@ -290,6 +326,8 @@ export default function Intelligence() {
           {(
             [
               ['monitoring', 'Monitoring', Radio],
+              ['research', 'Research queue', FileSearch],
+              ['education', 'Exams & careers', GraduationCap],
               ['discover', 'Research briefs', Lightbulb],
               ['competitors', 'Competitors', Users],
               ['sources', 'Sources', Globe2],
@@ -324,6 +362,25 @@ export default function Intelligence() {
           onAddReference={(kind) => {
             changeTab(kind === 'source' ? 'sources' : 'competitors');
             setEditor({ kind });
+          }}
+          onOpenResearch={() => {
+            setResearchFocus(undefined);
+            changeTab('research');
+          }}
+        />
+      ) : tab === 'research' ? (
+        <CompetitorResearch
+          focus={researchFocus}
+          onAddCompetitor={() => {
+            changeTab('competitors');
+            setEditor({ kind: 'competitor' });
+          }}
+        />
+      ) : tab === 'education' ? (
+        <EducationHub
+          onResearchRequested={(id) => {
+            setResearchFocus({ requestId: id });
+            changeTab('research');
           }}
         />
       ) : tab === 'discover' ? (
@@ -602,8 +659,9 @@ export default function Intelligence() {
               <div className="int-manual-note">
                 <span className="int-status-dot" />
                 <p>
-                  <strong>Research is manual for now.</strong> Sources and profiles are saved for
-                  review. Automatic monitoring starts only after a worker is connected.
+                  <strong>Keep the evidence attached.</strong> Supported source watches collect
+                  notices on schedule. The research queue tracks social-profile checks and dated
+                  evidence your team still needs to review.
                 </p>
               </div>
             </aside>
@@ -629,8 +687,8 @@ export default function Intelligence() {
                 {tab === 'competitors'
                   ? 'Collect channels, profiles and websites your team wants to review.'
                   : 'Build a reliable collection of exam, board and counselling authorities.'}{' '}
-                Configure a supported watch to check for updates automatically. Other profiles
-                remain available for manual review.
+                Configure a supported watch for scheduled updates. Research now checks supported
+                sources or creates an explicit research request for other profiles.
               </p>
             </div>
             <Button size="sm" onClick={() => changeTab('monitoring')}>
@@ -707,6 +765,30 @@ export default function Intelligence() {
                     <SourceLink url={item.url}>
                       Open {item.platform === 'website' ? 'website' : 'profile'}
                     </SourceLink>
+                    <div className="iv4-actions">
+                      <Button
+                        size="sm"
+                        disabled={!!busy}
+                        onClick={() => void researchCompetitor(item)}
+                      >
+                        <Search size={15} />
+                        {busy === `research-${item.id}`
+                          ? 'Checking…'
+                          : item.platform === 'google_business'
+                            ? 'Research GMB'
+                            : 'Research now'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setResearchFocus({ competitorId: item.id });
+                          changeTab('research');
+                        }}
+                      >
+                        <History size={15} />
+                        Evidence & history
+                      </Button>
+                    </div>
                     {isManager && ['youtube', 'website'].includes(item.platform) && (
                       <Button
                         size="sm"
@@ -736,8 +818,8 @@ export default function Intelligence() {
                       </Badge>
                       <span>
                         {item.lastCheckedAt
-                          ? `Reviewed ${displayDate(item.lastCheckedAt)}`
-                          : 'No review recorded'}
+                          ? `Last evidence ${displayDate(item.lastCheckedAt)}`
+                          : 'No evidence recorded'}
                       </span>
                     </div>
                   </article>

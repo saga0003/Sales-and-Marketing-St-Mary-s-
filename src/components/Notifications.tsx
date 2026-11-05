@@ -386,13 +386,22 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       item.entityType === 'source' ||
       item.entityType === 'notice' ||
       item.entityType === 'opportunity' ||
+      item.entityType === 'intelligence' ||
       item.entityType === 'research'
     ) {
       current.navigate('intelligence');
       window.location.hash =
         item.entityType === 'opportunity'
           ? 'intelligence?tab=opportunities'
-          : 'intelligence?tab=monitoring';
+          : /^(Exam (added|updated|verified)|Career pathway)/i.test(item.title)
+            ? 'intelligence?tab=education'
+            : /^(Competitor|Webpage|Research result|Exam research requested)/i.test(item.title)
+              ? 'intelligence?tab=research'
+              : 'intelligence?tab=monitoring';
+    } else if (item.entityType === 'keyword') {
+      current.navigate('performance');
+      window.location.hash =
+        'performance?tab=keywords&keyword=' + encodeURIComponent(item.entityId);
     } else if (item.entityType === 'connection') current.navigate('settings');
     else current.navigate('overview');
   }

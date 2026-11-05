@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import {
   Check,
+  Bot,
+  HardDrive,
   ChevronDown,
   Copy,
   History,
@@ -20,16 +22,20 @@ import { useWorkspace } from '../lib/workspace';
 import type { Role, User } from '../lib/types';
 import { Avatar, Badge, Button, EmptyState, Modal, PageHeading } from '../components/UI';
 import Connections from '../components/Connections';
+import McpSettings from '../components/McpSettings';
+import StorageSettings from '../components/StorageSettings';
 import { formatDate } from '../lib/utils';
 import { NotificationSettings } from '../components/Notifications';
 import '../styles/connections.css';
 
 type TeamUser = User & { active?: boolean };
 type AccessLink = { setupUrl: string; expiresAt?: string; name: string; purpose: string };
-type SettingsTab = 'connections' | 'team' | 'preferences';
+type SettingsTab = 'connections' | 'team' | 'preferences' | 'mcp' | 'storage';
 const readSettingsTab = (): SettingsTab => {
   const value = new URLSearchParams(window.location.hash.split('?')[1]).get('tab');
-  return value === 'team' || value === 'preferences' ? value : 'connections';
+  return value === 'team' || value === 'preferences' || value === 'mcp' || value === 'storage'
+    ? value
+    : 'connections';
 };
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : 'We could not save this change. Please try again.';
@@ -95,6 +101,8 @@ export default function Settings({
           [
             ['connections', 'Connections', Plug],
             ['team', 'Team & access', Users],
+            ['mcp', 'ChatGPT & MCP', Bot],
+            ['storage', 'Storage & access', HardDrive],
             ['preferences', 'Preferences', Settings2],
           ] as const
         ).map(([id, label, Icon]) => (
@@ -114,6 +122,8 @@ export default function Settings({
         ))}
       </div>
       {tab === 'connections' && <Connections />}
+      {tab === 'mcp' && <McpSettings />}
+      {tab === 'storage' && <StorageSettings />}
       {tab === 'team' && (
         <div className="team-layout">
           <section className="panel settings-card team-panel">

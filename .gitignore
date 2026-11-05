@@ -12,3 +12,4 @@ coverage/
 .DS_Store
 .openai/
 artifacts/
+supabase/.temp/

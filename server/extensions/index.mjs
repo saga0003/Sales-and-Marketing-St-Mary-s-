@@ -19,6 +19,15 @@ import {
 import { createPublishing, publicJob } from './publishing.mjs';
 
 const providerId = z.enum(PROVIDER_IDS);
+const applicationGroup = z.enum(['google', 'meta', 'linkedin']);
+const applicationProviders = { google: 'google', meta: 'instagram', linkedin: 'linkedin' };
+const applicationNames = { google: 'Google', meta: 'Meta', linkedin: 'LinkedIn' };
+const applicationDocs = {
+  google: 'https://developers.google.com/identity/protocols/oauth2/web-server',
+  meta: 'https://developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow/',
+  linkedin:
+    'https://learn.microsoft.com/en-us/linkedin/shared/authentication/authorization-code-flow',
+};
 const institutionName = z.string().trim().min(1).max(180);
 const date = z
   .string()
@@ -99,12 +108,45 @@ export async function registerExtensions(
       now,
     });
   const stamp = () => now().toISOString();
-  const callback = (id) => (origin ? `${origin}/api/connections/oauth/${id}/callback` : '');
+  // Every new service authorization uses the same exact server-generated URI.
+  // Provider/service identity is recovered only from session-bound authorization state.
+  const callback = () => (origin ? `${origin}/api/connections/oauth/callback` : '');
+  const legacyCallback = (id) => (origin ? `${origin}/api/connections/oauth/${id}/callback` : '');
+  async function isWorkspaceOwner(user) {
+    if (user.role !== 'manager') return false;
+    const marker = await db
+      .prepare("SELECT value FROM workspace_metadata WHERE key = 'workspace_owner_id'")
+      .get();
+    // An existing owner marker is authoritative, even when that person has been
+    // deactivated. Never silently promote another manager in that situation.
+    if (marker) return marker.value === user.id;
+    const legacyOwner = await db
+      .prepare(
+        "SELECT id FROM users WHERE role = 'manager' AND active = 1 ORDER BY created_at, id LIMIT 1",
+      )
+      .get();
+    return legacyOwner?.id === user.id;
+  }
+  async function requireOwner(request, _response, next) {
+    if (!(await isWorkspaceOwner(request.auth.user)))
+      throw new HttpError(
+        403,
+        'Only the workspace owner can manage shared provider applications. Managers can connect accounts using a configured application.',
+        'workspace_owner_required',
+      );
+    next();
+  }
+  async function lockApplicationGroup(id) {
+    if (db.kind === 'postgres')
+      await db
+        .prepare('SELECT pg_advisory_xact_lock(hashtext(?))')
+        .get(`smis:${db.schema}:provider-application:${providerGroup(id)}`);
+  }
   function requireVault() {
     if (!vault)
       throw new HttpError(
         503,
-        'A server encryption key is required before saving provider credentials or connecting accounts.',
+        'Secure credential storage needs administrator setup before provider applications can be saved or accounts can connect.',
         'encryption_required',
       );
   }
@@ -121,7 +163,7 @@ export async function registerExtensions(
       } catch {
         throw new HttpError(
           503,
-          'The saved provider credentials could not be decrypted. A manager must save them again.',
+          'The saved provider credentials could not be decrypted. The workspace owner must restore the original server encryption key before these applications can be used.',
           'provider_credentials_unavailable',
         );
       }
@@ -142,7 +184,7 @@ export async function registerExtensions(
     if (!clientId || !clientSecret)
       throw new HttpError(
         409,
-        'Save this provider’s application credentials before connecting an account.',
+        `${applicationNames[family]} administrator setup is required before account authorization is available. The workspace owner must register and configure this shared application once.`,
         'provider_setup_required',
       );
     return {
@@ -155,24 +197,68 @@ export async function registerExtensions(
   }
   async function setup(user) {
     const result = [];
+    const owner = await isWorkspaceOwner(user);
+    const groupErrors = new Map();
     for (const definition of Object.values(PROVIDERS)) {
-      let error;
-      try {
-        await connectionSettings(definition.id);
-      } catch (failure) {
-        error =
-          failure instanceof HttpError ? failure.message : 'Provider configuration is unavailable.';
+      const group = providerGroup(definition.id);
+      if (!groupErrors.has(group)) {
+        let failureMessage = '';
+        try {
+          await connectionSettings(definition.id);
+        } catch (failure) {
+          failureMessage =
+            failure instanceof HttpError
+              ? failure.message
+              : 'Provider configuration is unavailable.';
+        }
+        groupErrors.set(group, failureMessage);
       }
-      if (!origin) error = 'Set the deployment’s APP_ORIGIN before starting OAuth authorization.';
+      let error = groupErrors.get(group);
+      if (!origin)
+        error =
+          'The workspace’s production address is not configured. Ask the workspace owner to finish administrator setup.';
       result.push({
         ...definition,
         configured: !error,
-        canConfigure: Boolean(vault && user.role === 'manager'),
-        redirectUri: callback(definition.id),
+        canConfigure: Boolean(vault && owner),
+        redirectUri: callback(),
         ...(error ? { error } : {}),
       });
     }
     return result;
+  }
+  async function applicationCatalog(user) {
+    const definitions = await setup(user);
+    const applications = [];
+    for (const group of ['google', 'meta', 'linkedin']) {
+      const services = definitions.filter((item) => providerGroup(item.id) === group);
+      const saved = await db
+        .prepare('SELECT updated_at FROM provider_settings WHERE provider = ?')
+        .get(credentialKey(applicationProviders[group]));
+      applications.push({
+        id: group,
+        name: applicationNames[group],
+        configured: services.every((item) => item.configured),
+        canConfigure: services.some((item) => item.canConfigure),
+        credentialsSource: saved
+          ? 'workspace'
+          : services.every((item) => item.configured)
+            ? 'environment'
+            : 'missing',
+        updatedAt: saved?.updated_at ?? null,
+        redirectUri: callback(),
+        docsUrl: applicationDocs[group],
+        error: services.find((item) => item.error)?.error ?? null,
+        services: services.map(({ id, name, requirements, scopes, docsUrl }) => ({
+          id,
+          name,
+          requirements,
+          scopes,
+          docsUrl,
+        })),
+      });
+    }
+    return applications;
   }
   async function requireConnection(id, { lock = false, connected = false } = {}) {
     const connection = await db
@@ -279,10 +365,12 @@ export async function registerExtensions(
   }
   const authenticated = [requireAuth];
   const manager = [requireAuth, requireManager];
+  const owner = [requireAuth, requireManager, requireOwner];
 
   app.get('/api/connections', ...authenticated, async (request, response) => {
     response.json({
       providers: await setup(request.auth.user),
+      applicationAdministration: { isOwner: await isWorkspaceOwner(request.auth.user) },
       connections: (
         await db
           .prepare(
@@ -292,9 +380,16 @@ export async function registerExtensions(
       ).map(publicConnection),
     });
   });
-  app.put('/api/connections/providers/:provider', ...manager, async (request, response) => {
+  app.get('/api/connections/applications', ...owner, async (request, response) => {
+    response.json({
+      applications: await applicationCatalog(request.auth.user),
+      redirectUri: callback(),
+      encryptionConfigured: Boolean(vault),
+      originConfigured: Boolean(origin),
+    });
+  });
+  async function saveApplication(id, request, response, grouped = false) {
     requireVault();
-    const id = parse(providerId, request.params.provider);
     const key = credentialKey(id);
     const input = parse(
       z
@@ -338,6 +433,19 @@ export async function registerExtensions(
       );
     const family = PROVIDER_IDS.filter((item) => credentialKey(item) === key);
     await transaction(db, async () => {
+      await lockApplicationGroup(id);
+      let current = {};
+      try {
+        current = await connectionSettings(id);
+      } catch (error) {
+        if (error.code !== 'provider_setup_required') throw error;
+      }
+      if (hash(JSON.stringify(current)) !== hash(JSON.stringify(previous)))
+        throw new HttpError(
+          409,
+          'Application settings changed while you were saving. Refresh this owner setup and try again.',
+          'provider_setup_changed',
+        );
       for (const service of family) {
         for (const connection of await db
           .prepare(
@@ -375,7 +483,24 @@ export async function registerExtensions(
         stamp(),
       );
     });
-    response.json({ provider: (await setup(request.auth.user)).find((item) => item.id === id) });
+    response.json(
+      grouped
+        ? {
+            application: (await applicationCatalog(request.auth.user)).find(
+              (item) => item.id === providerGroup(id),
+            ),
+          }
+        : { provider: (await setup(request.auth.user)).find((item) => item.id === id) },
+    );
+  }
+  app.put('/api/connections/applications/:group', ...owner, async (request, response) => {
+    const group = parse(applicationGroup, request.params.group);
+    await saveApplication(applicationProviders[group], request, response, true);
+  });
+  // Kept for existing clients; shared developer credentials always require the
+  // same owner privilege as the separate application-administration screen.
+  app.put('/api/connections/providers/:provider', ...owner, async (request, response) => {
+    await saveApplication(parse(providerId, request.params.provider), request, response);
   });
   app.post('/api/connections/authorize', ...manager, async (request, response) => {
     requireVault();
@@ -405,26 +530,19 @@ export async function registerExtensions(
           request.auth.tokenHash,
           input.institution,
           vault.seal(
-            { verifier, configHash: hash(JSON.stringify(credentials)) },
+            { verifier, configHash: hash(JSON.stringify(credentials)), redirectUri: callback() },
             `oauth:${hash(state)}`,
           ),
           now().getTime() + 10 * 60000,
         );
     });
     response.json({
-      url: provider.authorize(
-        input.provider,
-        credentials,
-        callback(input.provider),
-        state,
-        verifier,
-      ),
+      url: provider.authorize(input.provider, credentials, callback(), state, verifier),
     });
   });
-  app.get('/api/connections/oauth/:provider/callback', async (request, response) => {
+  async function finishAuthorization(request, response, legacyProvider = null) {
     try {
       requireVault();
-      const id = parse(providerId, request.params.provider);
       const input = parse(
         z
           .object({
@@ -437,13 +555,14 @@ export async function registerExtensions(
       );
       if (!request.auth || request.auth.user.role !== 'manager')
         throw new HttpError(401, 'Sign in again before reconnecting.', 'oauth_session_expired');
-      const pending = await transaction(db, async () => {
+      const { pending, saved } = await transaction(db, async () => {
         const row = await db
           .prepare(`SELECT * FROM oauth_authorizations WHERE state_hash = ?${db.lockSuffix}`)
           .get(hash(input.state));
         if (
           !row ||
-          row.provider !== id ||
+          !PROVIDER_IDS.includes(row.provider) ||
+          (legacyProvider && row.provider !== legacyProvider) ||
           row.user_id !== request.auth.user.id ||
           row.session_hash !== request.auth.tokenHash ||
           Number(row.expires_at) <= now().getTime()
@@ -453,15 +572,24 @@ export async function registerExtensions(
             'Authorization state expired or did not match this session.',
             'oauth_state_invalid',
           );
+        const saved = vault.open(row.encrypted_verifier, `oauth:${row.state_hash}`);
+        const redirectUri = saved.redirectUri ?? legacyCallback(row.provider);
+        const expected = legacyProvider ? legacyCallback(legacyProvider) : callback();
+        if (!expected || redirectUri !== expected)
+          throw new HttpError(
+            400,
+            'The authorization returned to a different callback. Start the connection again.',
+            'oauth_callback_mismatch',
+          );
         await db
           .prepare('DELETE FROM oauth_authorizations WHERE state_hash = ?')
           .run(hash(input.state));
-        return row;
+        return { pending: row, saved: { ...saved, redirectUri } };
       });
       if (input.error || !input.code)
         throw new HttpError(400, 'Authorization was not granted.', 'oauth_denied');
+      const id = pending.provider;
       const credentials = await connectionSettings(id);
-      const saved = vault.open(pending.encrypted_verifier, `oauth:${pending.state_hash}`);
       if (saved.configHash !== hash(JSON.stringify(credentials)))
         throw new HttpError(
           409,
@@ -471,12 +599,19 @@ export async function registerExtensions(
       const tokens = await provider.exchange(
         id,
         credentials,
-        callback(id),
+        saved.redirectUri,
         input.code,
         saved.verifier,
       );
       const connectionId = opaqueId('conn');
       await transaction(db, async () => {
+        await lockApplicationGroup(id);
+        if (saved.configHash !== hash(JSON.stringify(await connectionSettings(id))))
+          throw new HttpError(
+            409,
+            'Application settings changed during authorization. Start the connection again.',
+            'oauth_setup_changed',
+          );
         await db
           .prepare(
             "INSERT INTO service_connections(id, provider, account_name, institution, status, encrypted_credentials, connected_by, created_at) VALUES (?, ?, ?, ?, 'awaiting_selection', ?, ?, ?)",
@@ -508,21 +643,198 @@ export async function registerExtensions(
         `/#settings?connection_error=${encodeURIComponent(code ?? 'oauth_failed')}`,
       );
     }
+  }
+  app.get('/api/connections/oauth/callback', (request, response) =>
+    finishAuthorization(request, response),
+  );
+  app.get('/api/connections/oauth/:provider/callback', (request, response) => {
+    const id = parse(providerId, request.params.provider);
+    return finishAuthorization(request, response, id);
   });
+  function authorizationCredentials(current) {
+    // Resource-specific credentials must never leak from Page A into Page B.
+    // The parent user authorization can discover more resources; each selected
+    // resource receives only the additional values returned for that resource.
+    const result = { ...current };
+    for (const key of [
+      'pageAccessToken',
+      'pageId',
+      'businessAccountName',
+      'hasVoiceOfMerchant',
+      'currency',
+      'timezone',
+      'loginCustomerId',
+    ])
+      delete result[key];
+    return result;
+  }
   app.get('/api/connections/:id/accounts', ...manager, async (request, response) => {
     const connection = await requireConnection(request.params.id);
     const accounts = await withProvider(connection, (current, credentials) =>
-      provider.discover(connection.provider, current, credentials),
+      provider.discover(connection.provider, authorizationCredentials(current), credentials),
+    );
+    const existing = new Map(
+      (
+        await db
+          .prepare(
+            "SELECT id, account_id, institution FROM service_connections WHERE provider = ? AND account_id IS NOT NULL AND status <> 'disconnected'",
+          )
+          .all(connection.provider)
+      ).map((row) => [row.account_id, row]),
     );
     response.json({
-      accounts: accounts.map(({ id, name, kind, platform, timezone, capabilities }) => ({
-        id,
-        name,
-        kind,
-        ...(platform ? { platform } : {}),
-        ...(timezone ? { timezone } : {}),
-        ...(capabilities ? { capabilities } : {}),
-      })),
+      accounts: [...new Map(accounts.map((item) => [item.id, item])).values()].map(
+        ({ id, name, kind, platform, timezone, capabilities }) => ({
+          id,
+          name,
+          kind,
+          ...(platform ? { platform } : {}),
+          ...(timezone ? { timezone } : {}),
+          ...(capabilities ? { capabilities } : {}),
+          ...(existing.has(id)
+            ? {
+                connectedConnectionId: existing.get(id).id,
+                connectedInstitution: existing.get(id).institution,
+              }
+            : {}),
+        }),
+      ),
+    });
+  });
+  async function selectAccounts(connectionId, accountIds, actor, { single = false } = {}) {
+    const connection = await requireConnection(connectionId);
+    if (single && connection.account_id && connection.account_id !== accountIds[0])
+      throw new HttpError(
+        409,
+        'A selected connection cannot be changed to a different account. Add a separate account and obtain fresh approval for a new post destination.',
+        'account_immutable',
+      );
+    const { current, accounts, configHash } = await withProvider(
+      connection,
+      async (current, credentials) => ({
+        current,
+        accounts: await provider.discover(
+          connection.provider,
+          authorizationCredentials(current),
+          credentials,
+        ),
+        configHash: hash(JSON.stringify(credentials)),
+      }),
+    );
+    const available = new Map(accounts.map((account) => [account.id, account]));
+    if (accountIds.some((id) => !available.has(id)))
+      throw new HttpError(
+        422,
+        'One of the selected accounts is no longer returned by this authorization. Refresh the account list and select accounts you can access.',
+        'invalid_account',
+      );
+    return transaction(db, async () => {
+      await lockApplicationGroup(connection.provider);
+      const locked = await requireConnection(connection.id, { lock: true });
+      if (
+        hash(
+          JSON.stringify(vault.open(locked.encrypted_credentials, `connection:${locked.id}`)),
+        ) !== hash(JSON.stringify(current)) ||
+        configHash !== hash(JSON.stringify(await connectionSettings(connection.provider))) ||
+        locked.institution !== connection.institution ||
+        locked.account_id !== connection.account_id
+      )
+        throw new HttpError(
+          409,
+          'This authorization changed while accounts were being checked. Refresh the list before selecting again.',
+          'connection_changed',
+        );
+      let usedSource = Boolean(locked.account_id);
+      const result = [];
+      for (const accountId of accountIds) {
+        const account = available.get(accountId);
+        const duplicate = await db
+          .prepare(
+            "SELECT * FROM service_connections WHERE provider = ? AND account_id = ? AND status <> 'disconnected' AND id <> ?",
+          )
+          .get(connection.provider, account.id, connection.id);
+        if (duplicate && duplicate.institution !== connection.institution)
+          throw new HttpError(
+            409,
+            `${account.name} already belongs to ${duplicate.institution}. No selected accounts were changed. Connect each resource to its intended school.`,
+            'account_already_connected',
+          );
+        let target;
+        if (duplicate) target = await requireConnection(duplicate.id, { lock: true });
+        else if (locked.account_id === account.id || (!locked.account_id && !usedSource)) {
+          target = locked;
+          usedSource = true;
+        } else {
+          const id = opaqueId('conn');
+          await db
+            .prepare(
+              "INSERT INTO service_connections(id,provider,account_name,institution,status,encrypted_credentials,connected_by,created_at) VALUES (?,?,?,?,'awaiting_selection',?,?,?)",
+            )
+            .run(
+              id,
+              connection.provider,
+              account.name,
+              connection.institution,
+              vault.seal(authorizationCredentials(current), `connection:${id}`),
+              actor.id,
+              stamp(),
+            );
+          target = await requireConnection(id, { lock: true });
+        }
+        await connectionUnlocked(target.id, { renew: target.account_id === account.id });
+        const credentials = {
+          ...authorizationCredentials(current),
+          ...(account.credentials ?? {}),
+          ...(account.pageAccessToken
+            ? { pageAccessToken: account.pageAccessToken, pageId: account.pageId }
+            : {}),
+        };
+        await db
+          .prepare(
+            "UPDATE service_connections SET account_id = ?, account_name = ?, status = 'connected', capabilities = ?, encrypted_credentials = ?, error = NULL, last_test_at = ?, sync_lease_id = NULL, sync_lease_expires_at = NULL WHERE id = ?",
+          )
+          .run(
+            account.id,
+            account.name,
+            JSON.stringify(account.capabilities ?? PROVIDERS[connection.provider].capabilities),
+            vault.seal(credentials, `connection:${target.id}`),
+            stamp(),
+            target.id,
+          );
+        await audit(
+          db,
+          actor,
+          target.account_id ? 'Account authorization renewed' : 'Account selected',
+          target.id,
+          `${account.name} connected to ${connection.institution}.`,
+          stamp(),
+        );
+        result.push(publicConnection(await requireConnection(target.id)));
+      }
+      if (!usedSource)
+        await db
+          .prepare(
+            "UPDATE service_connections SET status = 'disconnected', encrypted_credentials = NULL, capabilities = '[]', auto_sync = 0, next_sync_at = NULL WHERE id = ?",
+          )
+          .run(locked.id);
+      return result;
+    });
+  }
+  app.post('/api/connections/:id/select-many', ...manager, async (request, response) => {
+    const input = parse(
+      z
+        .object({
+          accountIds: z
+            .array(z.string().min(1).max(2048))
+            .min(1)
+            .max(25)
+            .refine((items) => new Set(items).size === items.length, 'Select each account once.'),
+        })
+        .strict(),
+      request.body,
+    );
+    response.json({
+      connections: await selectAccounts(request.params.id, input.accountIds, request.auth.user),
     });
   });
   app.post('/api/connections/:id/select', ...manager, async (request, response) => {
@@ -530,78 +842,10 @@ export async function registerExtensions(
       z.object({ accountId: z.string().min(1).max(2048) }).strict(),
       request.body,
     );
-    const connection = await requireConnection(request.params.id);
-    const current = await loadConnectionCredentials(connection);
-    const accounts = await withProvider(connection, (_current, credentials) =>
-      provider.discover(connection.provider, _current, credentials),
-    );
-    const account = accounts.find((item) => item.id === input.accountId);
-    if (!account)
-      throw new HttpError(
-        422,
-        'Select an account returned by this provider authorization.',
-        'invalid_account',
-      );
-    const result = await transaction(db, async () => {
-      const locked = await requireConnection(connection.id, { lock: true });
-      await connectionUnlocked(connection.id, { renew: locked.account_id === account.id });
-      if (locked.account_id && locked.account_id !== account.id)
-        throw new HttpError(
-          409,
-          'A selected connection cannot be changed to a different account. Add a new connection and update the post destination for fresh approval.',
-          'account_immutable',
-        );
-      const credentials = {
-        ...current,
-        ...(account.credentials ?? {}),
-        ...(account.pageAccessToken
-          ? { pageAccessToken: account.pageAccessToken, pageId: account.pageId }
-          : {}),
-      };
-      const duplicate = await db
-        .prepare(
-          "SELECT * FROM service_connections WHERE provider = ? AND account_id = ? AND status <> 'disconnected' AND id <> ?",
-        )
-        .get(connection.provider, account.id, connection.id);
-      let target = locked;
-      if (duplicate) {
-        if (duplicate.institution !== connection.institution)
-          throw new HttpError(
-            409,
-            'This account already belongs to a different institution in the workspace.',
-            'account_already_connected',
-          );
-        target = await requireConnection(duplicate.id, { lock: true });
-        await connectionUnlocked(target.id, { renew: true });
-        await db
-          .prepare(
-            "UPDATE service_connections SET status = 'disconnected', encrypted_credentials = NULL WHERE id = ?",
-          )
-          .run(connection.id);
-      }
-      await db
-        .prepare(
-          "UPDATE service_connections SET account_id = ?, account_name = ?, status = 'connected', capabilities = ?, encrypted_credentials = ?, error = NULL, last_test_at = ?, sync_lease_id = NULL, sync_lease_expires_at = NULL WHERE id = ?",
-        )
-        .run(
-          account.id,
-          account.name,
-          JSON.stringify(account.capabilities ?? PROVIDERS[connection.provider].capabilities),
-          vault.seal(credentials, `connection:${target.id}`),
-          stamp(),
-          target.id,
-        );
-      await audit(
-        db,
-        request.auth.user,
-        duplicate ? 'Account authorization renewed' : 'Account selected',
-        target.id,
-        `${account.name} connected to ${connection.institution}.`,
-        stamp(),
-      );
-      return publicConnection(await requireConnection(target.id));
+    const result = await selectAccounts(request.params.id, [input.accountId], request.auth.user, {
+      single: true,
     });
-    response.json(result);
+    response.json(result[0]);
   });
   app.post('/api/connections/:id/test', ...manager, async (request, response) => {
     const connection = await requireConnection(request.params.id, { connected: true });
@@ -940,6 +1184,25 @@ export async function registerExtensions(
   return {
     storage,
     syncDueReports: reporting.syncDueReports,
+    async withSearchConsole(connectionId, expectedIdentity, callback) {
+      const connection = await requireConnection(connectionId, { connected: true });
+      if (
+        connection.provider !== 'search_console' ||
+        connection.status !== 'connected' ||
+        !JSON.parse(connection.capabilities).includes('analytics:read') ||
+        !expectedIdentity ||
+        connection.account_id !== expectedIdentity.accountId ||
+        connection.institution !== expectedIdentity.institution
+      )
+        throw new HttpError(
+          409,
+          'Select the connected Search Console property for this school before importing keyword history.',
+          'search_connection_mismatch',
+        );
+      return withProvider(connection, (current, credentials) =>
+        callback(connection, current, credentials),
+      );
+    },
     async bootstrap(request) {
       const user = request.auth.user;
       return {

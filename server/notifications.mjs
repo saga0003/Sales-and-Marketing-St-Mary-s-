@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { HttpError, parse } from './validation.mjs';
 
 const postActions = new Map([
+  ['MCP draft created', ['post_updated', 'ChatGPT prepared a draft for review']],
   ['Submitted for review', ['review_requested', 'A post is ready for review']],
   ['Draft approved', ['approved', 'Your post was approved']],
   ['Draft rejected', ['rejected', 'A post was rejected']],
@@ -68,11 +69,15 @@ export async function notificationsForAudit(db, event) {
       )
       .all(task?.owner ?? '', task?.owner ?? '', task?.owner ?? '');
   } else if (
-    /^(Research brief|Research source changed|Opportunity|New notices|Monitor|SEO audit|Connection needs|Scheduled report import failed)/i.test(
+    /^(Research brief|Research source changed|Opportunity|New notices|Monitor|SEO audit|Connection needs|Scheduled report import failed|Webpage change detected|Competitor research requested|Competitor changes recorded|Research result recorded|Exam (added|updated|verified|research requested)|Career pathway (added|updated|verified)|Keyword (positions updated|tracking needs attention|answer evidence recorded|search evidence recorded))/i.test(
       action,
     )
   ) {
-    entityType = /^(Connection|Scheduled report)/.test(action) ? 'connection' : 'intelligence';
+    entityType = /^Keyword /.test(action)
+      ? 'keyword'
+      : /^(Connection|Scheduled report)/.test(action)
+        ? 'connection'
+        : 'intelligence';
     kind = 'workspace_update';
     title = action;
     recipients = await db
@@ -81,7 +86,7 @@ export async function notificationsForAudit(db, event) {
   } else return;
   const message = [label, detail].filter(Boolean).join(' · ').slice(0, 4000);
   for (const userId of new Set(recipients.map((row) => row.id))) {
-    if (userId === actor?.id) continue;
+    if (userId === actor?.id && actor?.via !== 'mcp') continue;
     const notificationId = `notification_${createHash('sha256').update(`${id}:${userId}`).digest('hex').slice(0, 32)}`;
     await db
       .prepare(

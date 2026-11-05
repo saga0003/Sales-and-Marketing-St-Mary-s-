@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowUpRight,
   BarChart3,
@@ -24,12 +24,13 @@ import { Avatar, Badge, Modal } from './components/UI';
 import PostComposer from './components/PostComposer';
 import Overview from './pages/Overview';
 import Content from './pages/Content';
-import Intelligence from './pages/Intelligence';
-import Performance from './pages/Performance';
 import Workspace from './pages/Workspace';
-import Settings from './pages/Settings';
 import { NotificationBell, NotificationProvider } from './components/Notifications';
 import WorkspaceGuide from './components/WorkspaceGuide';
+
+const Intelligence = lazy(() => import('./pages/Intelligence'));
+const Performance = lazy(() => import('./pages/Performance'));
+const Settings = lazy(() => import('./pages/Settings'));
 
 const navigation = [
   {
@@ -352,12 +353,20 @@ function Shell() {
         </div>
       </div>
       <main ref={mainRef} id="main-content" className="app-main" tabIndex={-1}>
-        {view === 'overview' && <Overview />}
-        {view === 'content' && <Content initialTab={contentTab} />}
-        {view === 'intelligence' && <Intelligence />}
-        {view === 'performance' && <Performance />}
-        {view === 'workspace' && <Workspace />}
-        {view === 'settings' && <Settings compact={compact} onDensityChange={setDensity} />}
+        <Suspense
+          fallback={
+            <p className="panel" role="status" style={{ padding: 24 }}>
+              Opening this section…
+            </p>
+          }
+        >
+          {view === 'overview' && <Overview />}
+          {view === 'content' && <Content initialTab={contentTab} />}
+          {view === 'intelligence' && <Intelligence />}
+          {view === 'performance' && <Performance />}
+          {view === 'workspace' && <Workspace />}
+          {view === 'settings' && <Settings compact={compact} onDensityChange={setDensity} />}
+        </Suspense>
       </main>
       <footer className="app-footer">
         <span>

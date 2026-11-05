@@ -6,6 +6,7 @@ import WebsiteAnalytics from '../components/WebsiteAnalytics';
 import PlatformAnalytics from '../components/PlatformAnalytics';
 import OwnedSiteChecks from '../components/OwnedSiteChecks';
 import AnswerVisibility from '../components/AnswerVisibility';
+import KeywordTracking from '../components/KeywordTracking';
 import '../styles/performance.css';
 
 const tabs = [
@@ -13,6 +14,7 @@ const tabs = [
   { id: 'channels', label: 'Social & local' },
   { id: 'ads', label: 'Ads reports' },
   { id: 'search', label: 'Search Console' },
+  { id: 'keywords', label: 'Keyword trends' },
   { id: 'checks', label: 'Website checks' },
   { id: 'answers', label: 'AI answer visibility' },
 ] as const;
@@ -89,6 +91,7 @@ export default function Performance() {
         />
       )}
       {tab === 'checks' && <OwnedSiteChecks />}
+      {tab === 'keywords' && <KeywordTracking />}
       {tab === 'answers' && <AnswerVisibility />}
     </div>
   );

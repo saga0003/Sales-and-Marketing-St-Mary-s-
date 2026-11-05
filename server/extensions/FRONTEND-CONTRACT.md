@@ -2,6 +2,12 @@
 
 All connections, imported reports and publication IDs are actual persisted records. Empty arrays mean no account or data exists yet. Provider configuration alone does not establish account access or provider approval.
 
+## v0.4 connection administration
+
+The [v0.4 connection guide](../../docs/CONNECTIONS-V04.md) is authoritative for the updated connection flow and routes. Shared application settings are owner-only, including the legacy provider-settings route described below. New authorization flows use `/api/connections/oauth/callback`; legacy service callbacks remain supported for previously issued state. Normal Connect actions go directly to provider consent. The resource chooser uses `POST /api/connections/:id/select-many` for 1–25 independently attributed resources, while the old single-selection endpoint remains available.
+
+`GET /api/connections` also returns `applicationAdministration: { isOwner }`. Owner setup uses `GET /api/connections/applications` and `PUT /api/connections/applications/:group`, where group is `google`, `meta`, or `linkedin`. These routes never return saved secrets or access tokens. The API details below otherwise describe the retained v0.3 contracts.
+
 ## Types
 
 ```ts

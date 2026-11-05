@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   ArrowUpRight,
   Bell,
+  Bot,
   BookOpen,
   CheckCircle2,
   Database,
@@ -16,15 +17,18 @@ import '../styles/guide.css';
 const repository = 'https://github.com/saga0003/Sales-and-Marketing-St-Mary-s-/blob/main/docs/';
 export default function WorkspaceGuide({ onClose }: { onClose: () => void }) {
   const { navigate } = useWorkspace();
-  const [tab, setTab] = useState<'start' | 'test' | 'connect' | 'research' | 'storage'>('start');
+  const [tab, setTab] = useState<
+    'start' | 'test' | 'connect' | 'research' | 'keywords' | 'storage'
+  >('start');
   const tabs = [
     { id: 'start', label: 'Start here' },
     { id: 'test', label: 'Test with your team' },
     { id: 'connect', label: 'Connect accounts' },
     { id: 'research', label: 'Research & competitors' },
+    { id: 'keywords', label: 'Keywords & ChatGPT' },
     { id: 'storage', label: 'Storage & access' },
   ] as const;
-  const go = (view: 'settings' | 'content' | 'intelligence', tab?: string) => {
+  const go = (view: 'settings' | 'content' | 'intelligence' | 'performance', tab?: string) => {
     onClose();
     navigate(view);
     if (tab) window.location.hash = `${view}?tab=${tab}`;
@@ -59,14 +63,14 @@ export default function WorkspaceGuide({ onClose }: { onClose: () => void }) {
             <div>
               <dt>Intelligence</dt>
               <dd>
-                Official notices, source watches, competitor uploads, and verified research briefs.
+                Official notices, webpage changes, competitor research, exams and career paths.
               </dd>
             </div>
             <div>
               <dt>Performance</dt>
               <dd>
-                Connected analytics, search and ad reports, website checks, and answer visibility
-                observations.
+                Connected analytics, daily keyword trends, ad reports, website checks and answer
+                evidence.
               </dd>
             </div>
             <div>
@@ -75,7 +79,10 @@ export default function WorkspaceGuide({ onClose }: { onClose: () => void }) {
             </div>
             <div>
               <dt>Settings</dt>
-              <dd>Connected accounts, team access, sound, desktop alerts, and preferences.</dd>
+              <dd>
+                Connected accounts, team access, ChatGPT, storage usage and notification
+                preferences.
+              </dd>
             </div>
           </dl>
           <div className="guide-note">
@@ -153,14 +160,15 @@ export default function WorkspaceGuide({ onClose }: { onClose: () => void }) {
           <h3>Set up the application once. Connect accounts as needed.</h3>
           <p>
             The first connection needs a developer application registered with Google, Meta, or
-            LinkedIn. Once its credentials, callback URLs, and required approvals are in place, a
-            manager can connect a school’s account in a few steps.
+            LinkedIn. The workspace owner manages that setup in Application administration. Once the
+            shared application and required approvals are in place, a manager can connect a school’s
+            account in a few steps.
           </p>
           <ol className="guide-steps">
             <li>
-              <strong>Prepare the provider app.</strong> Follow the service-specific requirements in
-              Settings → Connections. Google services share one Google credential group; Instagram,
-              Facebook, and Meta Ads share a Meta group.
+              <strong>Owner setup, once.</strong> Settings → Connections → Application
+              administration shows three shared groups and a generated callback address. Ordinary
+              connection cards never ask staff for secrets or callback URLs.
             </li>
             <li>
               <strong>Choose Connect account.</strong> Select the institution. The provider opens
@@ -171,8 +179,9 @@ export default function WorkspaceGuide({ onClose }: { onClose: () => void }) {
               permissions. The software cannot grant itself access to your accounts.
             </li>
             <li>
-              <strong>Select the exact resource.</strong> Choose a GA4 property, Page, channel,
-              business location, or advertising account, then test access.
+              <strong>Select the resources.</strong> Choose one or more properties, Pages, channels,
+              locations or ad accounts, then save and test access. Each selected resource has its
+              own report and publishing destination.
             </li>
             <li>
               <strong>Import or publish deliberately.</strong> Import a dated report in Performance,
@@ -192,7 +201,7 @@ export default function WorkspaceGuide({ onClose }: { onClose: () => void }) {
           </Button>
           <a
             className="text-link"
-            href={`${repository}CONNECTING-ACCOUNTS.md`}
+            href={`${repository}CONNECTIONS-V04.md`}
             target="_blank"
             rel="noreferrer"
           >
@@ -244,8 +253,61 @@ export default function WorkspaceGuide({ onClose }: { onClose: () => void }) {
             prompts, observed answers, mentions, citations, and evidence; it does not invent an AI
             ranking or run consumer AI accounts in the background.
           </p>
+          <p>
+            Use <strong>Research queue</strong> to queue a GMB or social-profile investigation, open
+            it in ChatGPT and save dated evidence. A queued request has not yet inspected the
+            account. Use <strong>Exams & careers</strong> for multiple exam descriptions, official
+            references, linked watches and Science or Commerce entry routes. New source changes
+            clear earlier guidance verification.
+          </p>
           <Button variant="primary" onClick={() => go('intelligence')}>
             Open intelligence <ArrowUpRight size={16} />
+          </Button>
+        </div>
+      )}
+      {tab === 'keywords' && (
+        <div className="guide-section">
+          <span className="guide-symbol">
+            <Bot size={26} />
+          </span>
+          <h3>Follow keyword movement. Bring ChatGPT into the workflow.</h3>
+          <ol className="guide-steps">
+            <li>
+              <strong>Add your keywords.</strong> Performance → Keyword trends saves the exact
+              keyword, school, property, country and device. Connect Search Console and enable daily
+              checks for automatic history. Finalized provider data is several days behind today;
+              gaps are not zero.
+            </li>
+            <li>
+              <strong>Read the trend.</strong> Each keyword has a small line graph and an
+              improvement or decline label. Lower search position is better. Team and MCP
+              observations remain in a separate evidence view.
+            </li>
+            <li>
+              <strong>Record answer evidence.</strong> Save the actual model, prompt, date, answer,
+              school mention and citation. AEO/GEO trends compare matching contexts and do not
+              represent a universal AI rank.
+            </li>
+            <li>
+              <strong>Connect ChatGPT.</strong> Copy the server URL in Settings → ChatGPT & MCP. In
+              ChatGPT Plugins, add a custom MCP server with OAuth, then sign in and choose reading,
+              draft or research permissions.
+            </li>
+            <li>
+              <strong>Ask it to work on a request.</strong> ChatGPT can read saved research, inspect
+              sources in its session and save cited findings or drafts. Manager verification and
+              publication approval remain in this workspace.
+            </li>
+          </ol>
+          <p className="guide-note-text">
+            No automatic OpenAI API calls are made. Your ChatGPT plan limits still apply. MCP does
+            not wake ChatGPT or run paid background searches. MFA is deferred.
+          </p>
+          <Button variant="primary" onClick={() => go('performance', 'keywords')}>
+            Open keyword trends <ArrowUpRight size={16} />
+          </Button>
+          <Button onClick={() => go('settings', 'mcp')}>
+            Open ChatGPT connection <ArrowUpRight size={16} />
           </Button>
         </div>
       )}
@@ -293,12 +355,20 @@ export default function WorkspaceGuide({ onClose }: { onClose: () => void }) {
             </div>
           </dl>
           <Badge tone="green">Saved work persists across deployments</Badge>
+          <p>
+            The workspace allows 512 MiB and 200 media items, including pending upload reservations.
+            Images are limited to 3 MiB; videos to 40 MiB and 10 minutes. Supabase hosting and
+            download quotas are separate.
+          </p>
+          <Button onClick={() => go('settings', 'storage')}>
+            View current storage usage <ArrowUpRight size={16} />
+          </Button>
         </div>
       )}
       <div className="guide-footer">
         <a
           className="text-link"
-          href={`${repository}USER-GUIDE.md`}
+          href={`${repository}V04-USER-GUIDE.md`}
           target="_blank"
           rel="noreferrer"
         >

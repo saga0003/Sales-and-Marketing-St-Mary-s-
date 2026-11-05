@@ -14,7 +14,7 @@ export const PROVIDERS = {
     description:
       'Read website traffic, top pages, acquisition sources and key events from a GA4 property.',
     requirements: [
-      'Create one Google Cloud OAuth web application and register every Google callback URL you intend to use.',
+      'Create one Google Cloud OAuth web application and register the workspace’s shared callback once.',
       'Enable the Google Analytics Admin API and Google Analytics Data API.',
       'Authorize a Google account with access to the school’s GA4 property. Connecting an account does not install GA4 on your website.',
     ],
@@ -29,7 +29,7 @@ export const PROVIDERS = {
     description:
       'Import search clicks, impressions, queries and pages for a verified website property.',
     requirements: [
-      'Reuse your Google OAuth app and add this callback URL.',
+      'Reuse the shared Google OAuth application and callback.',
       'Enable the Google Search Console API and verify the website in Search Console.',
       'The authorizing Google account needs access to that property. This connection reads reports and does not change indexing.',
     ],
@@ -48,7 +48,7 @@ export const PROVIDERS = {
     description:
       'Import channel analytics and upload an approved MP4 video to your selected channel.',
     requirements: [
-      'Enable YouTube Data API v3 and YouTube Analytics API in your Google project; add this callback URL.',
+      'Enable YouTube Data API v3 and YouTube Analytics API in your shared Google project.',
       'Authorize the identity that owns the intended YouTube channel or Brand Account. Verify the selected channel before approving uploads.',
       'Provider verification, quota and account restrictions still apply. Upload visibility and made-for-kids settings are part of the approved content.',
     ],
@@ -64,7 +64,7 @@ export const PROVIDERS = {
       'Select a school location, import profile performance and publish an approved business update.',
     requirements: [
       'Request Business Profile API access for your Google Cloud project. A zero quota means access is not yet approved.',
-      'Enable Account Management, Business Information, Business Profile Performance and Google My Business APIs; register this callback.',
+      'Enable Account Management, Business Information, Business Profile Performance and Google My Business APIs in the shared Google project.',
       'Authorize an owner or manager of the verified school location. Some business types or locations cannot create local posts.',
     ],
   },
@@ -115,7 +115,7 @@ export const PROVIDERS = {
     description:
       'Import professional-account insights and publish approved images, carousels or Reels.',
     requirements: [
-      'Use a Meta app with Facebook Login and register every Meta callback URL you intend to use.',
+      'Use a Meta app with Facebook Login and register the workspace’s shared callback once.',
       'Connect a professional Instagram account linked to a Facebook Page that you manage.',
       'Grant the listed permissions; advanced access/app review or eligible app-role testing is required. Reconnect an older authorization to enable new scopes.',
     ],
@@ -130,7 +130,7 @@ export const PROVIDERS = {
     description:
       'Read recent Page posts and engagement snapshots, and publish an approved text or image post.',
     requirements: [
-      'Reuse the Meta app, add this callback URL, and obtain the listed Page permissions.',
+      'Reuse the shared Meta app and callback, and obtain the listed Page permissions.',
       'Authorize a person with sufficient Page access and select the exact Page.',
       'This connection publishes to Pages, not personal Facebook profiles. Provider app review/access rules still apply.',
     ],
@@ -145,7 +145,7 @@ export const PROVIDERS = {
     description:
       'Read ad-account and campaign performance with the account currency and provider attribution.',
     requirements: [
-      'Enable the Marketing API use case in your Meta app and register this callback.',
+      'Enable the Marketing API use case in the shared Meta application.',
       'Obtain ads_read access and authorize a person who can view the intended ad account.',
       'This adapter imports reports only. It cannot create campaigns, change budgets or spend money.',
     ],
@@ -160,7 +160,7 @@ export const PROVIDERS = {
     description:
       'Select an administered organization, import Page statistics and publish an approved post.',
     requirements: [
-      'Create a LinkedIn developer app, verify its associated Page and register this callback.',
+      'Create a LinkedIn developer app, verify its associated Page and register the workspace’s shared callback once.',
       'Request Community Management API access and the listed organization scopes.',
       'Authorize a person with an eligible Page administration role. LinkedIn decides development/standard access; connecting here cannot bypass that decision.',
     ],
@@ -177,7 +177,7 @@ export const PROVIDERS = {
       'Publish an approved text or image post as the member who authorizes the connection.',
     requirements: [
       'Enable Sign In with LinkedIn using OpenID Connect and Share on LinkedIn for your developer app.',
-      'Register this callback URL and authorize the profile owner.',
+      'Reuse the shared LinkedIn callback and authorize the profile owner.',
       'Member analytics/read-back access is not included in self-serve Share on LinkedIn. Ambiguous delivery must be inspected before a new post is created.',
     ],
   },

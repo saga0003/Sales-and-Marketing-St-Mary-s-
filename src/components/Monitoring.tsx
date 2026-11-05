@@ -21,6 +21,7 @@ import { useWorkspace } from '../lib/workspace';
 import type { IntelligenceNotice, IntelligenceWatch } from '../lib/types';
 import { formatDate } from '../lib/utils';
 import { Badge, Button, EmptyState, Modal } from './UI';
+import { YoutubePushControl } from './YoutubePushControl';
 import '../styles/monitoring.css';
 
 const stamp = (value: string | null) =>
@@ -47,9 +48,11 @@ export interface WatchTarget {
 export default function Monitoring({
   onOpenBrief,
   onAddReference,
+  onOpenResearch,
 }: {
   onOpenBrief: (id?: string) => void;
   onAddReference: (kind: 'source' | 'competitor') => void;
+  onOpenResearch?: () => void;
 }) {
   const { data, mutate, refresh, toast } = useWorkspace();
   const [section, setSection] = useState<'inbox' | 'watches' | 'catalog'>('inbox');
@@ -164,6 +167,21 @@ export default function Monitoring({
           <small>Each watch uses its own interval</small>
         </div>
       </div>
+      {onOpenResearch && (
+        <div className="iv4-notice">
+          <Globe2 size={20} />
+          <div>
+            <p>
+              <strong>Track more than notice links.</strong> Compare public webpage text, request
+              Google Business or social-profile research, and keep dated evidence in the research
+              queue.
+            </p>
+            <Button size="sm" onClick={onOpenResearch}>
+              Open research queue <ArrowRight size={15} />
+            </Button>
+          </div>
+        </div>
+      )}
       <div className="toolbar monitoring-toolbar">
         <div className="tabs" aria-label="Monitoring sections">
           {[
@@ -473,6 +491,7 @@ export default function Monitoring({
                       </button>
                     </div>
                   )}
+                  {watch.mode === 'youtube' && <YoutubePushControl watch={watch} />}
                 </article>
               ))}
             </div>

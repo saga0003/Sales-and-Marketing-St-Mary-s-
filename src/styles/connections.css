@@ -47,13 +47,13 @@
 }
 .connections-page {
   display: grid;
-  gap: 23px;
+  gap: 16px;
 }
 .connection-intro {
   display: flex;
   align-items: center;
   gap: 20px;
-  padding: 27px 30px;
+  padding: 18px 22px;
   background: linear-gradient(120deg, #f1ebff, #f9f7ff 70%);
   border-color: #e6def6;
 }
@@ -1085,4 +1085,248 @@
   padding: 0.4rem 0.7rem;
   background: #fff;
   color: var(--text);
+}
+
+.connection-view-tabs {
+  flex-wrap: wrap;
+  margin: 0;
+}
+.connection-view-tabs .tab {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+}
+.connection-connect-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  padding: 1rem 1.25rem;
+  margin: 0;
+}
+.connection-setup-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0;
+}
+.connection-setup-notice > div {
+  flex: 1 1 28rem;
+}
+.connection-setup-notice strong {
+  font-size: 1rem;
+}
+.connection-setup-notice p {
+  font-size: 0.875rem;
+  margin-bottom: 0;
+}
+.connection-connect-toolbar > div {
+  flex: 1 1 23rem;
+}
+.connection-connect-toolbar > div > strong {
+  font-size: 1.125rem;
+}
+.connection-connect-toolbar p {
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.6;
+  margin: 0.4rem 0 0;
+}
+.connection-connect-toolbar > .field {
+  flex: 0 1 19rem;
+  min-width: min(100%, 15rem);
+}
+.connection-service-permissions {
+  margin: 0 0 1rem;
+}
+.connection-account-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.connection-account-filters input {
+  max-width: 17rem;
+}
+.connection-choose-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.connection-choose-toolbar > .field {
+  flex: 1 1 15rem;
+}
+.connection-choose-toolbar > span {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+.connection-account-choices {
+  max-height: 26rem;
+  overflow-y: auto;
+  padding: 0.25rem;
+}
+.connection-account-choice {
+  min-height: 4rem;
+}
+.connection-account-choice > span {
+  min-width: 0;
+  flex: 1;
+}
+.connection-account-choice strong,
+.connection-account-choice small {
+  overflow-wrap: anywhere;
+}
+.connection-account-choice.unavailable {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+.connection-administration {
+  display: grid;
+  gap: 1.25rem;
+}
+.connection-administration > .connection-onboarding-note {
+  margin: 0;
+}
+.connection-admin-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.connection-admin-heading > div {
+  flex: 1 1 28rem;
+}
+.connection-admin-heading h2 {
+  font-size: 1.5rem;
+  margin: 0.35rem 0 0.5rem;
+}
+.connection-admin-heading p {
+  font-size: 1rem;
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+}
+.connection-shared-callback {
+  padding: 1.4rem;
+  display: grid;
+  gap: 1rem;
+}
+.connection-shared-callback > div {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.9rem;
+}
+.connection-shared-callback > div > svg {
+  flex-shrink: 0;
+  margin-top: 0.2rem;
+  color: var(--violet);
+}
+.connection-shared-callback h3 {
+  font-size: 1.125rem;
+  margin: 0 0 0.35rem;
+}
+.connection-shared-callback p {
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 0;
+}
+.connection-shared-callback .connection-copy-field input {
+  min-width: 0;
+}
+.connection-application-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+.connection-application-card {
+  padding: 1.3rem;
+}
+.connection-application-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  align-items: center;
+}
+.connection-application-title h3 {
+  font-size: 1.25rem;
+  margin: 0;
+  flex: 1;
+}
+.connection-application-services {
+  font-size: 1rem;
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 3.2em;
+}
+.connection-application-card .connection-detail-note {
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+.connection-application-card .connection-provider-actions {
+  gap: 0.8rem;
+  margin-top: 1.25rem;
+}
+.connection-application-requirements {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.connection-application-requirements summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text);
+}
+.connection-application-requirements h4 {
+  font-size: 1rem;
+  color: var(--text);
+  margin-bottom: 0.3rem;
+}
+.connection-application-requirements ul {
+  padding-left: 1.1rem;
+}
+.connection-application-requirements li + li {
+  margin-top: 0.35rem;
+}
+.connection-application-requirements a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 600;
+}
+@media (max-width: 600px) {
+  .connection-view-tabs .tab {
+    flex: 1 1 10rem;
+    white-space: normal;
+    line-height: 1.5;
+  }
+  .connection-connect-toolbar {
+    padding: 1.15rem;
+  }
+  .connection-connect-toolbar > .field,
+  .connection-account-filters,
+  .connection-account-filters label,
+  .connection-account-filters input {
+    width: 100%;
+    max-width: none;
+    flex-basis: 100%;
+  }
+  .connection-admin-heading h2 {
+    font-size: 1.25rem;
+  }
+  .connection-shared-callback,
+  .connection-application-card {
+    padding: 1.15rem;
+  }
 }

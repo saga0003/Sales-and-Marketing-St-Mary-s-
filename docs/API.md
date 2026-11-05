@@ -1,4 +1,18 @@
-# Workspace API — version 0.3
+# Workspace API — version 0.4
+
+Version 0.4 adds the following contracts to the existing API below:
+
+| Area                                                                       | Contract                                   |
+| -------------------------------------------------------------------------- | ------------------------------------------ |
+| Shared provider applications, common callback, multiple selected resources | [CONNECTIONS-V04.md](CONNECTIONS-V04.md)   |
+| Webpage snapshots, research requests/evidence, exams and career pathways   | [INTELLIGENCE-V04.md](INTELLIGENCE-V04.md) |
+| Daily keyword history and separate AEO/GEO observations                    | [KEYWORD-TRACKING.md](KEYWORD-TRACKING.md) |
+| YouTube subscription intent, signed callbacks and renewal                  | [YOUTUBE-PUSH.md](YOUTUBE-PUSH.md)         |
+| Scoped ChatGPT OAuth and Streamable HTTP tools                             | [MCP.md](MCP.md)                           |
+
+`GET /api/workspace/storage` is manager-only and reports committed media, pending reservations, remaining application allowance, item/file limits, the configured Supabase project reference, active-account count and the application-managed authentication model. It returns no credentials and does not pretend to measure the provider's billing-plan limits.
+
+`GET /api/health` includes `release: "0.4.0"`. Core schema version is 4, provider extension version is 2, keyword schema version is 1 and additive intelligence extension version is 3. The hosted legacy intelligence marker stays at 1 for rolling-deployment compatibility. `AUTO_MIGRATE=false` remains the normal production setting.
 
 This release supports a persistent team workspace, revision-specific approvals,
 private images and MP4 videos, durable publishing jobs, provider reports, an

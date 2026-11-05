@@ -443,7 +443,7 @@ test('migrations disabled only checks the intelligence version marker', async ()
   const app = { get() {}, post() {}, patch() {}, delete() {} };
   const context = {
     db: {
-      prepare: () => ({ get: async () => ({ value: '1' }) }),
+      prepare: () => ({ get: async () => ({ value: '3' }) }),
       transaction() {
         assert.fail('No migration transaction expected.');
       },
@@ -457,6 +457,21 @@ test('migrations disabled only checks the intelligence version marker', async ()
     requireManager() {},
   };
   assert.equal(typeof (await registerIntelligence(app, context)).runDue, 'function');
+  context.db.prepare = (sql) => ({
+    get: async () => ({ value: sql.includes('intelligence_extensions_version') ? '3' : '1' }),
+  });
+  assert.equal(typeof (await registerIntelligence(app, context)).runDue, 'function');
+  context.db.prepare = (sql) => ({
+    get: async () => (sql.includes('intelligence_extensions_version') ? undefined : { value: '3' }),
+  });
+  assert.equal(typeof (await registerIntelligence(app, context)).runDue, 'function');
+  context.db.prepare = (sql) => ({
+    get: async () => ({ value: sql.includes('intelligence_extensions_version') ? '4' : '1' }),
+  });
+  await assert.rejects(
+    () => registerIntelligence(app, context),
+    /Intelligence database migration required/,
+  );
   context.db.prepare = () => ({ get: async () => undefined });
   await assert.rejects(
     () => registerIntelligence(app, context),

@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import {
   transaction,
@@ -12,6 +12,7 @@ import { HttpError, parse } from '../validation.mjs';
 import { SOURCE_CATALOG, INTELLIGENCE_LIMITS } from './catalog.mjs';
 import { publicHttpsUrl, createRobotsReader } from './safe-fetch.mjs';
 import { parseSource, youtubeFeed } from './parse.mjs';
+import { invalidateExamEvidenceForWatch } from './education.mjs';
 
 const {
   minimumIntervalHours,
@@ -360,17 +361,35 @@ export function createWatchService({ db, now, read, notify, automationEnabled = 
       );
     });
   }
-  async function run(id, { actor = null, dueOnly = false } = {}) {
+  async function run(id, { actor = null, dueOnly = false, youtubePush = null } = {}) {
     const token = randomBytes(24).toString('base64url');
     const claimed = await transaction(db, async () => {
       const row = await lockWatch(id);
+      if (
+        youtubePush &&
+        (row.mode !== 'youtube' ||
+          Number(row.active) !== 1 ||
+          youtubeFeed(row.url) !== youtubeFeed(youtubePush.topic))
+      )
+        throw new HttpError(
+          409,
+          'This YouTube watch changed or was paused.',
+          'youtube_watch_changed',
+        );
       if (dueOnly && (Number(row.active) !== 1 || row.next_check_at > stamp())) return null;
       if (row.run_token && row.lease_until > stamp()) {
+        if (youtubePush)
+          throw new HttpError(
+            503,
+            'The source check is busy. Retry this notification.',
+            'youtube_watch_busy',
+          );
         if (dueOnly) return null;
         assertIdle(row);
       }
       if (
         !dueOnly &&
+        !youtubePush &&
         row.last_checked_at &&
         now().getTime() - new Date(row.last_checked_at).getTime() < minManualIntervalMs
       )
@@ -398,9 +417,16 @@ export function createWatchService({ db, now, read, notify, automationEnabled = 
     try {
       verifyWatchUrl(claimed.url, claimed.mode);
       const reader = createRobotsReader(read);
-      const document = await reader(claimed.url, {
-        beforeRequest: (url) => verifyWatchUrl(url.href, claimed.mode),
-      });
+      const document = youtubePush
+        ? {
+            status: 200,
+            url: claimed.url,
+            text: youtubePush.text,
+            headers: { 'content-type': 'application/atom+xml' },
+          }
+        : await reader(claimed.url, {
+            beforeRequest: (url) => verifyWatchUrl(url.href, claimed.mode),
+          });
       if (document.status !== 200)
         throw new HttpError(
           409,
@@ -432,11 +458,48 @@ export function createWatchService({ db, now, read, notify, automationEnabled = 
         let added = 0;
         let updated = 0;
         let changedBriefs = 0;
-        for (const entry of entries) {
+        for (const original of entries) {
+          let entry = original;
           const previous = await db
             .prepare('SELECT * FROM intelligence_notices WHERE watch_id = ? AND item_key = ?')
             .get(id, entry.key);
-          if (previous?.content_hash === entry.hash) continue;
+          let providerChanged = false;
+          if (claimed.mode === 'youtube') {
+            const pushed = await db
+              .prepare(
+                'SELECT source_updated_at FROM intelligence_youtube_push_items WHERE watch_id=? AND item_key=?',
+              )
+              .get(id, entry.key);
+            if (pushed && entry.sourceUpdatedAt && entry.sourceUpdatedAt < pushed.source_updated_at)
+              continue;
+            if (youtubePush) {
+              if (pushed && entry.sourceUpdatedAt <= pushed.source_updated_at) continue;
+              if (!entry.hasDescription && previous) {
+                const value = {
+                  title: entry.title,
+                  url: entry.url,
+                  excerpt: previous.excerpt,
+                  publishedAt: entry.publishedAt,
+                };
+                entry = {
+                  ...entry,
+                  ...value,
+                  hash: createHash('sha256').update(JSON.stringify(value)).digest('hex'),
+                };
+              }
+              // A signed title/description update can omit the changed description.
+              // Preserve the last excerpt and flag the source for review instead of inventing text.
+              providerChanged = Boolean(previous && entry.sourceUpdatedAt > previous.updated_at);
+              await db
+                .prepare(
+                  `INSERT INTO intelligence_youtube_push_items(watch_id,item_key,source_updated_at,received_at)
+                 VALUES(?,?,?,?) ON CONFLICT(watch_id,item_key) DO UPDATE SET source_updated_at=excluded.source_updated_at,received_at=excluded.received_at`,
+                )
+                .run(id, entry.key, entry.sourceUpdatedAt, timestamp);
+              if (previous && !pushed && entry.sourceUpdatedAt < previous.updated_at) continue;
+            }
+          }
+          if (previous?.content_hash === entry.hash && !providerChanged) continue;
           const noticeId = previous?.id || makeId('notice');
           if (previous) {
             await db
@@ -518,7 +581,9 @@ export function createWatchService({ db, now, read, notify, automationEnabled = 
           .run(
             timestamp,
             timestamp,
-            new Date(now().getTime() + Number(row.interval_hours) * 3600000).toISOString(),
+            youtubePush
+              ? row.next_check_at
+              : new Date(now().getTime() + Number(row.interval_hours) * 3600000).toISOString(),
             added + updated,
             timestamp,
             id,
@@ -528,6 +593,8 @@ export function createWatchService({ db, now, read, notify, automationEnabled = 
         await db
           .prepare(`UPDATE ${table} SET last_checked_at = ?, updated_at = ? WHERE id = ?`)
           .run(timestamp, timestamp, row.source_id ?? row.competitor_id);
+        if (!baseline && added + updated > 0)
+          await invalidateExamEvidenceForWatch(db, id, timestamp);
         await audit(
           db,
           actor,
@@ -537,7 +604,7 @@ export function createWatchService({ db, now, read, notify, automationEnabled = 
               ? 'New notices detected'
               : 'Source check completed',
           id,
-          `${claimed.name}: ${added} links discovered, ${updated} metadata changes.${baseline ? ' Initial links are a baseline; their publication dates may be older.' : ''}`,
+          `${claimed.name}: ${added} links discovered, ${updated} metadata changes.${youtubePush ? ' Received through a signed YouTube push; an omitted description retains the previous excerpt. Open the source to review the current description.' : ''}${baseline ? ' Initial links are a baseline; their publication dates may be older.' : ''}`,
           timestamp,
         );
         return { added, updated, changedBriefs };
@@ -757,7 +824,18 @@ export function createWatchService({ db, now, read, notify, automationEnabled = 
       );
     });
   }
-  return { list, notices, create, update, remove, run, runDue, fromCatalog, createBrief };
+  return {
+    list,
+    notices,
+    create,
+    update,
+    remove,
+    run,
+    runDue,
+    fromCatalog,
+    createBrief,
+    ingestYoutubePush: (id, payload) => run(id, { youtubePush: payload }),
+  };
 }
 
 export function registerWatchRoutes(app, context, service) {

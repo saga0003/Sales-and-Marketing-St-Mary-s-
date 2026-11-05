@@ -150,6 +150,19 @@ export async function createApp(options = {}) {
   });
   try {
     await initializeWorkspace(db, config, now());
+    // The first active manager owns provider application setup. Once recorded,
+    // deactivation never silently transfers ownership to another manager.
+    if (
+      !(await db
+        .prepare("SELECT value FROM workspace_metadata WHERE key='workspace_owner_id'")
+        .get())
+    ) {
+      await db
+        .prepare(
+          "INSERT INTO workspace_metadata(key,value) SELECT 'workspace_owner_id',id FROM users WHERE role='manager' AND active=1 ORDER BY created_at,id LIMIT 1 ON CONFLICT(key) DO NOTHING",
+        )
+        .run();
+    }
   } catch (error) {
     await db.close();
     throw error;
@@ -171,6 +184,7 @@ export async function createApp(options = {}) {
   const dummyPasswordHash = hashPasswordSync(newToken());
   let extensions = {};
   let intelligence = {};
+  let rankings = {};
   let mediaMaintenance = {};
   app.use((request, response, next) => {
     response.set({
@@ -184,6 +198,19 @@ export async function createApp(options = {}) {
   app.use(express.json({ limit: '256kb', strict: true }));
   app.use('/api', (request, response, next) => {
     response.set('Cache-Control', 'no-store');
+    // YouTube hub callbacks authenticate signed XML or subscription intent;
+    // they do not use an ambient browser session.
+    if (/^\/intelligence\/youtube-push\/callback\/[A-Za-z0-9_-]+\/?$/.test(request.path))
+      return next();
+    // OAuth token/registration endpoints use explicit OAuth credentials, not
+    // ambient session cookies. Manager consent remains behind normal CSRF.
+    if (/^\/mcp\/oauth\/(authorize|token|register|revoke)\/?$/.test(request.path)) return next();
+    if (/^\/mcp\/?$/.test(request.path)) {
+      const origin = request.get('origin');
+      if (origin && origin !== config.publicOrigin && origin !== 'https://chatgpt.com')
+        return next(new HttpError(403, 'The MCP request origin is not allowed.', 'invalid_origin'));
+      return next();
+    }
     if (!unsafeMethods.has(request.method)) return next();
     if (request.get('sec-fetch-site') === 'cross-site') {
       return next(new HttpError(403, 'Cross-site requests are not allowed.', 'invalid_origin'));
@@ -263,6 +290,7 @@ export async function createApp(options = {}) {
   app.get('/api/health', (_request, response) => {
     response.json({
       status: 'ok',
+      release: '0.4.0',
       demoMode: config.demoMode,
       evaluationMode: config.evaluationMode,
       storage: { driver: db.kind, persistent: db.persistent },
@@ -575,13 +603,49 @@ export async function createApp(options = {}) {
           now,
           requireAuth,
           requireManager,
-          options: options.intelligenceOptions ?? {},
+          options: {
+            appOrigin: config.publicOrigin,
+            encryptionKey: options.extensionOptions?.encryptionKey,
+            ...(options.intelligenceOptions ?? {}),
+          },
+        });
+      }
+      if (options.rankings !== false) {
+        const { registerRankings } = await import('./rankings/index.mjs');
+        rankings = await registerRankings(app, {
+          db,
+          config,
+          now,
+          requireAuth,
+          requireManager,
+          options: {
+            withSearchConsole: extensions.withSearchConsole,
+            ...(options.rankingsOptions ?? {}),
+          },
         });
       }
     } catch (error) {
       await db.close();
       throw error;
     }
+  }
+  if (options.mcp !== false) {
+    const { registerMcp } = await import('./mcp.mjs');
+    registerMcp(app, {
+      db,
+      config,
+      now,
+      requireAuth,
+      requireManager,
+      createPost,
+      intelligence,
+      rankings,
+      extensions,
+      options: {
+        encryptionKey: options.extensionOptions?.encryptionKey,
+        ...(options.mcpOptions ?? {}),
+      },
+    });
   }
   app.get('/api/intelligence/cron', async (request, response) => {
     const cronSecret = options.extensionOptions?.cronSecret ?? process.env.CRON_SECRET;
@@ -608,7 +672,14 @@ export async function createApp(options = {}) {
         'Scheduled report imports are unavailable.',
         'reporting_unavailable',
       );
-    response.json(await extensions.syncDueReports({ limit: 1 }));
+    const reports = await extensions.syncDueReports({ limit: 1 });
+    let keywords;
+    try {
+      keywords = await rankings.runDue?.({ limit: 3 });
+    } catch {
+      keywords = { error: 'Keyword updates will be retried on the next scheduled sweep.' };
+    }
+    response.json({ ...reports, keywords });
   });
   app.use('/api', requireAuth);
   registerNotifications(app, { db, now });

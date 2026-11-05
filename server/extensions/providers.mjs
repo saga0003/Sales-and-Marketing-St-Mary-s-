@@ -139,7 +139,7 @@ export function createProviderClient({
           include_granted_scopes: 'true',
           state,
           access_type: 'offline',
-          prompt: 'consent',
+          prompt: 'consent select_account',
           code_challenge_method: 'S256',
           code_challenge: createHash('sha256').update(verifier).digest('base64url'),
         }).toString();

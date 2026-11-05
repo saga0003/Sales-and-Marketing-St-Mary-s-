@@ -1,6 +1,6 @@
-# Roadmap after version 0.3
+# Roadmap after version 0.4
 
-Version 0.3 implements the next working layer of the school’s marketing
+The v0.3 baseline established the first working layer of the school’s marketing
 workspace: review notifications, clearer typography, private video/carousel
 assets, additional official provider adapters, recurring reporting, bounded
 research monitoring, owned-site SEO checks and richer shared documents.
@@ -10,7 +10,24 @@ accounts and sources. Shipping adapter code does not grant Google, Meta or
 LinkedIn access, prove that a source never changes its markup, or establish
 admissions attribution. The application makes those dependencies visible.
 
-## What is implemented now
+## Added in version 0.4
+
+The new baseline includes owner-only shared provider applications, a common callback, multi-account selection, separate account reports, dated competitor research, public-page diffs, opt-in YouTube push, an exam registry, career-entry routes, daily keyword histories, and authenticated ChatGPT MCP. See [V04-USER-GUIDE.md](V04-USER-GUIDE.md) for the current workflow and [MCP.md](MCP.md) for the scope boundary.
+
+The next implementation order is:
+
+1. Complete the school's Google, Meta and LinkedIn app registration, then validate one real resource per desired service. There were zero configured applications/accounts at the v0.4 inspection. Provider consent and app approval cannot be replaced by a simulated successful connection.
+2. Populate a small, reviewed Science/Commerce exam and pathway set. Link the right official watches and academic years; validate current dates, eligibility, medical-college approval status and seat tables before drafting claims.
+3. Validate a real Search Console property and YouTube push subscription. Expand only after checking identity, delayed/missing metrics, delivery and correction handling.
+4. Add evidence extraction for actual notice PDFs/tables, preserving document, page, year, category/quota and original source. No fabricated totals or silent approved-caption changes.
+5. Improve student-facing career exploration and collaborative documents using the existing source/revision model, then add the specifically needed publishing formats and long-term reporting history.
+6. Design ad campaign changes separately with account, budget and approval controls. The current ads adapters are reporting only; this release creates no advertising spend.
+
+**Budget:** no new paid scraping, SERP, OAuth broker or background AI service. The current MCP server makes no OpenAI API calls. The user's maximum $1 API allowance is not spent or treated as a recurring budget. Existing hosting and ChatGPT subscriptions have separate limits; do not upgrade or promise unlimited free hosting. Prefer the existing maintained open-source dependencies over a second hosted scheduler or document suite unless a specific gap requires it.
+
+MFA remains last, after the requested product workflows and account pilot. It is not a release gate for this iteration and is not enabled.
+
+## Existing baseline retained from v0.3
 
 | Workstream                 | Implemented in v0.3                                                                                                                                      | Boundary                                                                                              |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -228,9 +245,10 @@ Extend verified-site checks to bounded crawling, rendered-page inspection,
 Core Web Vitals and recurring tasks if the pilot identifies those needs.
 Preserve URL-level findings and fix history.
 
-Automated AI visibility studies need an agreed prompt set, actual provider APIs,
-paid usage budget where applicable, language/location controls and reproducible
-evidence. Record observations and sampling limits; do not turn a small prompt
+Daily Search Console histories and matching-context AEO/GEO evidence now exist.
+Further automated AI studies must respect the no-paid-service constraint: use
+explicit ChatGPT/MCP research sessions or separately approved local resources,
+with agreed prompts, language/location controls and reproducible evidence. Record observations and sampling limits; do not turn a small prompt
 sample into a universal ranking or guaranteed result. ChatGPT Pro access is not
 an application API credential.
 
@@ -275,7 +293,7 @@ path that can send unapproved school content.
 
 ## Release claims and effort estimates
 
-Version 0.3 provides working application code and local automated coverage of
+Version 0.4 provides working application code and local automated coverage of
 the workflows above. Live provider acceptance depends on the school’s actual
 accounts and the production checks described here. Release notes should list
 what was actually connected, imported and published; mock-provider tests are
