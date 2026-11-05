@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowUpRight,
   BarChart3,
-  Bell,
   BookOpen,
   CalendarDays,
   ChevronRight,
@@ -16,13 +15,12 @@ import {
   Search,
   Settings as SettingsIcon,
   ShieldCheck,
-  Sparkles,
   Users,
   X,
 } from 'lucide-react';
 import { WorkspaceProvider, useWorkspace } from './lib/workspace';
 import { institutions, type Role, type View } from './lib/types';
-import { Avatar, Badge, Button, Modal } from './components/UI';
+import { Avatar, Badge, Modal } from './components/UI';
 import PostComposer from './components/PostComposer';
 import Overview from './pages/Overview';
 import Content from './pages/Content';
@@ -30,6 +28,8 @@ import Intelligence from './pages/Intelligence';
 import Performance from './pages/Performance';
 import Workspace from './pages/Workspace';
 import Settings from './pages/Settings';
+import { NotificationBell, NotificationProvider } from './components/Notifications';
+import WorkspaceGuide from './components/WorkspaceGuide';
 
 const navigation = [
   {
@@ -67,7 +67,9 @@ const navigation = [
 export default function App() {
   return (
     <WorkspaceProvider>
-      <Shell />
+      <NotificationProvider>
+        <Shell />
+      </NotificationProvider>
     </WorkspaceProvider>
   );
 }
@@ -94,7 +96,7 @@ function Shell() {
     () => localStorage.getItem('stmarys-density') === 'compact',
   );
   const mainRef = useRef<HTMLElement>(null);
-  const pending = data.posts.filter((post) => post.status === 'in_review');
+  const closeHeaderMenu = useCallback(() => setMenu(null), []);
   const label = navigation.find((item) => item.id === view)?.label || 'Settings';
   const tab = new URLSearchParams(hash.split('?')[1]).get('tab');
   const contentTab = tab === 'approvals' || tab === 'calendar' ? tab : 'library';
@@ -172,10 +174,11 @@ function Shell() {
       toast(error instanceof Error ? error.message : 'Could not sign out.', 'error');
     }
   }
-  function reviewQueue() {
-    go('content');
-    window.location.hash = 'content?tab=approvals';
-  }
+  useEffect(() => {
+    const openInbox = () => setMenu('notifications');
+    window.addEventListener('stmarys-open-notifications', openInbox);
+    return () => window.removeEventListener('stmarys-open-notifications', openInbox);
+  }, []);
 
   return (
     <div className={`app-shell${compact ? ' compact' : ''}`}>
@@ -238,43 +241,11 @@ function Shell() {
           >
             <CircleHelp size={18} />
           </button>
-          <div className="header-menu-wrap" data-header-menu>
-            <button
-              className="icon-button"
-              aria-label={`Review notifications${pending.length ? `, ${pending.length} posts waiting` : ''}`}
-              aria-expanded={menu === 'notifications'}
-              onClick={() => setMenu(menu === 'notifications' ? null : 'notifications')}
-            >
-              <Bell size={18} />
-              {pending.length > 0 && <span className="notification-dot" />}
-            </button>
-            {menu === 'notifications' && (
-              <section className="header-popover" aria-label="Review notifications">
-                <h3>Ready for a second look</h3>
-                <p>
-                  {pending.length
-                    ? `${pending.length} drafts are waiting for review.`
-                    : 'There are no drafts waiting for review.'}
-                </p>
-                <div className="menu-separator" />
-                {pending.slice(0, 3).map((post) => (
-                  <button key={post.id} className="notif-row" onClick={reviewQueue}>
-                    <ShieldCheck size={17} />
-                    <div>
-                      <strong>{post.title}</strong>
-                      <small>
-                        {post.ownerName} · Revision {post.revision}
-                      </small>
-                    </div>
-                  </button>
-                ))}
-                <button onClick={reviewQueue}>
-                  Open approvals
-                  <ArrowUpRight size={15} />
-                </button>
-              </section>
-            )}
-          </div>
+          <NotificationBell
+            open={menu === 'notifications'}
+            onToggle={() => setMenu(menu === 'notifications' ? null : 'notifications')}
+            onClose={closeHeaderMenu}
+          />
           <button
             className="icon-button settings-trigger"
             aria-label="Workspace settings"
@@ -406,80 +377,7 @@ function Shell() {
         />
       )}
       {searchOpen && <CommandPalette onClose={() => setSearchOpen(false)} />}
-      {helpOpen && (
-        <Modal title="Your team’s next great story starts here" onClose={() => setHelpOpen(false)}>
-          <div className="help-grid">
-            <div className="help-item">
-              <FileText size={23} />
-              <h3>Create with context</h3>
-              <p>
-                Draft your caption, choose channels, and attach the official source. Save your work
-                or send it for manager review.
-              </p>
-            </div>
-            <div className="help-item">
-              <ShieldCheck size={23} />
-              <h3>A clear approval step</h3>
-              <p>
-                Managers review each revision. Changes clear the previous approval. Approved content
-                can be scheduled to a connected account, or kept in your planning calendar.
-              </p>
-            </div>
-            <div className="help-item">
-              <Compass size={23} />
-              <h3>Keep research close</h3>
-              <p>
-                Organise competitor profiles and official notices. Check the source, verify the
-                facts, then turn an idea into a draft.
-              </p>
-            </div>
-            <div className="help-item">
-              <Users size={23} />
-              <h3>Move work forward</h3>
-              <p>
-                Assign tasks, set dates, and keep school guidelines together. Use search to jump
-                straight to a draft or section.
-              </p>
-            </div>
-          </div>
-          <div className="modal-note">
-            <Sparkles size={18} />
-            <span>
-              {data.demoMode
-                ? 'This is a demo workspace. Example posts, research opportunities, campaigns and charts are illustrative.'
-                : 'Your team’s changes are saved in this workspace.'}{' '}
-              Connect an eligible account in Settings before scheduling a live publication. Planning
-              a date alone does not publish a post, and source bookmarks do not run automatic
-              monitoring.
-            </span>
-          </div>
-          <div className="help-shortcuts">
-            <span>
-              <kbd className="keyboard-key">Ctrl / ⌘ K</kbd> Search
-            </span>
-            <span>
-              <kbd className="keyboard-key">N</kbd> New draft
-            </span>
-            <span>
-              <kbd className="keyboard-key">Esc</kbd> Close dialog
-            </span>
-          </div>
-          <div className="form-actions">
-            <Button
-              onClick={() => {
-                setHelpOpen(false);
-                go('settings');
-              }}
-            >
-              View connections
-              <ArrowUpRight size={15} />
-            </Button>
-            <Button variant="primary" onClick={() => setHelpOpen(false)}>
-              Got it
-            </Button>
-          </div>
-        </Modal>
-      )}
+      {helpOpen && <WorkspaceGuide onClose={() => setHelpOpen(false)} />}
     </div>
   );
 }

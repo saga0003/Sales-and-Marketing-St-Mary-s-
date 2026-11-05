@@ -4,6 +4,7 @@ import {
   CalendarClock,
   Check,
   CheckCheck,
+  ChevronLeft,
   ChevronRight,
   Clock3,
   Copy,
@@ -21,7 +22,9 @@ import {
 import { useWorkspace } from '../lib/workspace';
 import type { Post, PublicationJob } from '../lib/types';
 import { Avatar, Badge, Button, PlatformIcon, StatusBadge } from './UI';
-import { assetImageUrl } from './MediaLibrary';
+import { assetImageUrl, isVideoAsset } from './MediaLibrary';
+import { providerNames, providerPlatform } from '../lib/providers';
+import { publicationIssues } from '../lib/publishing';
 import '../styles/content.css';
 
 const indiaDate = (value: string, withTime = true) =>
@@ -65,6 +68,7 @@ export default function PostPreview({
   const [feedbackError, setFeedbackError] = useState('');
   const [actionError, setActionError] = useState('');
   const [imageFailed, setImageFailed] = useState(false);
+  const [mediaIndex, setMediaIndex] = useState(0);
   const [duplicating, setDuplicating] = useState(false);
   const [confirmApproval, setConfirmApproval] = useState(false);
   useEffect(() => {
@@ -74,7 +78,11 @@ export default function PostPreview({
     setActionError('');
     setConfirmApproval(false);
   }, [post.id, post.revision, post.status, post.scheduledAt, data.user.id, data.user.role]);
-  useEffect(() => setImageFailed(false), [post.mediaUrl, post.assetId]);
+  useEffect(() => {
+    setMediaIndex(0);
+    setImageFailed(false);
+  }, [post.id, post.revision, post.mediaUrl, post.assetIds?.join('|'), post.assetId]);
+  useEffect(() => setImageFailed(false), [mediaIndex]);
 
   const isManager = data.user.role === 'manager';
   const publicationLocked = data.publicationJobs.some(
@@ -88,8 +96,12 @@ export default function PostPreview({
       (data.user.id === post.ownerId &&
         ['draft', 'changes_requested', 'rejected'].includes(post.status)));
   const source = safeUrl(post.sourceUrl);
-  const asset = data.mediaAssets.find((item) => item.id === post.assetId);
-  const media = post.assetId ? assetImageUrl(asset) : safeUrl(post.mediaUrl)?.href;
+  const assetIds = post.assetIds || (post.assetId ? [post.assetId] : []);
+  const assets = assetIds.map((id) => data.mediaAssets.find((item) => item.id === id));
+  const asset = assets[mediaIndex] || assets[0];
+  const media = assetIds.length ? assetImageUrl(asset) : safeUrl(post.mediaUrl)?.href;
+  const mediaMissing = assets.some((item) => !item);
+  const publishErrors = publicationIssues(post, data.connections, data.mediaAssets);
   const destinations = (post.destinationIds || []).map((id) =>
     data.connections.find((connection) => connection.id === id),
   );
@@ -126,6 +138,17 @@ export default function PostPreview({
         'Choose a future planned date, then submit the updated revision for approval.';
       setActionError(message);
       toast(message, 'error');
+      return;
+    }
+    if (
+      action === 'approve' &&
+      hasDestinations &&
+      (imageFailed || mediaMissing || Object.keys(publishErrors).length)
+    ) {
+      setActionError(
+        Object.values(publishErrors)[0] ||
+          'Preview all saved media before approving this revision. A file could not be loaded.',
+      );
       return;
     }
     setBusy(action);
@@ -184,12 +207,24 @@ export default function PostPreview({
 
       <div className={`preview-story preview-story-${post.palette}`}>
         {media && !imageFailed ? (
-          <img
-            className="preview-image"
-            src={media}
-            alt={`Visual for ${post.title || 'this post'}`}
-            onError={() => setImageFailed(true)}
-          />
+          isVideoAsset(asset) ? (
+            <video
+              className="preview-image"
+              src={media}
+              controls
+              playsInline
+              preload="metadata"
+              aria-label={`Video for ${post.title || 'this post'}`}
+              onError={() => setImageFailed(true)}
+            />
+          ) : (
+            <img
+              className="preview-image"
+              src={media}
+              alt={`Visual for ${post.title || 'this post'}`}
+              onError={() => setImageFailed(true)}
+            />
+          )
         ) : (
           <div className="preview-type-cover">
             <span className="preview-school">{post.institution || 'St. Mary’s Group'}</span>
@@ -201,9 +236,36 @@ export default function PostPreview({
         )}
         <span className="preview-format">{post.format}</span>
       </div>
-      {(imageFailed || (post.assetId && !asset)) && (
+      {assetIds.length > 1 && (
+        <div className="preview-carousel-controls">
+          <span>
+            Slide {mediaIndex + 1} of {assetIds.length} · {asset?.name || 'Unavailable file'}
+          </span>
+          <div>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Previous carousel slide"
+              disabled={mediaIndex === 0}
+              onClick={() => setMediaIndex((index) => index - 1)}
+            >
+              <ChevronLeft size={17} />
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Next carousel slide"
+              disabled={mediaIndex >= assetIds.length - 1}
+              onClick={() => setMediaIndex((index) => index + 1)}
+            >
+              <ChevronRight size={17} />
+            </button>
+          </div>
+        </div>
+      )}
+      {(imageFailed || mediaMissing) && (
         <p className="preview-media-note">
-          The saved image couldn’t load. Reopen the media library before approving publication.
+          A saved media file could not load. Reopen the media library before approving publication.
         </p>
       )}
 
@@ -219,7 +281,12 @@ export default function PostPreview({
           {destinations.length ? (
             destinations.map((connection, index) => (
               <div key={post.destinationIds?.[index]}>
-                <PlatformIcon platform="instagram" size={16} />
+                <PlatformIcon
+                  platform={
+                    connection ? providerPlatform(connection.provider) || 'website' : 'website'
+                  }
+                  size={16}
+                />
                 <span>
                   {connection?.accountName || 'Unavailable account'}
                   <small>
@@ -240,6 +307,37 @@ export default function PostPreview({
             </p>
           )}
         </div>
+        {destinations.some((connection) => connection?.provider === 'youtube') && (
+          <div className="preview-youtube-settings">
+            <strong>YouTube settings included in this approval</strong>
+            <dl>
+              <div>
+                <dt>Requested visibility</dt>
+                <dd>{post.publicationOptions?.youtubePrivacy || 'Not selected'}</dd>
+              </div>
+              <div>
+                <dt>Audience</dt>
+                <dd>
+                  {typeof post.publicationOptions?.madeForKids === 'boolean'
+                    ? post.publicationOptions.madeForKids
+                      ? 'Made for children'
+                      : 'Not made for children'
+                    : 'Not selected'}
+                </dd>
+              </div>
+              <div>
+                <dt>Altered or synthetic media</dt>
+                <dd>
+                  {typeof post.publicationOptions?.containsSyntheticMedia === 'boolean'
+                    ? post.publicationOptions.containsSyntheticMedia
+                      ? 'Yes'
+                      : 'No'
+                    : 'Not selected'}
+                </dd>
+              </div>
+            </dl>
+          </div>
+        )}
         <div className="preview-channel-row">
           <Avatar name={post.institution || 'St. Mary’s'} size="sm" />
           <div className="preview-channel-name">
@@ -341,7 +439,8 @@ export default function PostPreview({
                   <ShieldCheck size={16} />
                   <span>
                     Your decision applies to <strong>revision {post.revision}</strong>, with the
-                    caption, image, source, and destination accounts shown here.
+                    caption, saved media in display order, source, publication settings, and
+                    destination accounts shown here.
                     {hasDestinations && ' Approving also queues delivery to those accounts.'}
                   </span>
                 </div>
@@ -353,11 +452,21 @@ export default function PostPreview({
                       aria-label="Confirm approval and queued delivery"
                     >
                       <strong>Approve revision {post.revision} & queue delivery</strong>
-                      <p>The saved image and caption shown above will be sent to:</p>
+                      <p>
+                        The saved media, caption, and publication settings shown above will be sent
+                        to:
+                      </p>
                       <ul>
                         {destinations.map((connection, index) => (
                           <li key={post.destinationIds?.[index]}>
-                            <PlatformIcon platform="instagram" size={16} />
+                            <PlatformIcon
+                              platform={
+                                connection
+                                  ? providerPlatform(connection.provider) || 'website'
+                                  : 'website'
+                              }
+                              size={16}
+                            />
                             <span>
                               <strong>{connection?.accountName || 'Unavailable account'}</strong>
                               <small>
@@ -550,7 +659,7 @@ export default function PostPreview({
               <div className="preview-waiting">
                 <CheckCheck size={18} />
                 <span>
-                  <strong>{post.sample ? 'Sample published record' : 'Published record'}</strong>
+                  <strong>{post.sample ? 'Sample delivery record' : 'Delivery record'}</strong>
                   <span>
                     {post.sample ? 'This is demonstration content.' : 'This record is read only.'}
                   </span>
@@ -576,8 +685,8 @@ export default function PostPreview({
               {duplicating ? 'Creating a copy…' : 'Duplicate as a new draft'}
             </Button>
             <p className="preview-publish-note">
-              Your exact revision, saved image and destination accounts stay together throughout
-              review and publishing.
+              Your exact revision, saved media, publication settings, and destination accounts stay
+              together throughout review and publishing.
             </p>
           </div>
         )}
@@ -596,7 +705,7 @@ const deliveryStatus: Record<
 > = {
   queued: { label: 'Queued', tone: 'violet' },
   processing: { label: 'Publishing', tone: 'violet' },
-  published: { label: 'Confirmed published', tone: 'green' },
+  published: { label: 'Delivery confirmed', tone: 'green' },
   failed: { label: 'Failed', tone: 'red' },
   needs_reconciliation: { label: 'Confirmation needed', tone: 'amber' },
   cancelled: { label: 'Cancelled', tone: 'gray' },
@@ -625,20 +734,8 @@ function PublishingPanel({
   const hasQueued = current.some((job) =>
     ['queued', 'processing', 'published', 'failed', 'needs_reconciliation'].includes(job.status),
   );
-  const eligible =
-    destinations.length > 0 &&
-    destinations.every((id) => {
-      const connection = data.connections.find((item) => item.id === id);
-      return (
-        connection?.status === 'connected' &&
-        connection.provider === 'instagram' &&
-        connection.institution === post.institution &&
-        !!connection.accountId
-      );
-    }) &&
-    !!post.assetId &&
-    post.format === 'Post' &&
-    post.caption.length <= 2200;
+  const problems = publicationIssues(post, data.connections, data.mediaAssets);
+  const eligible = destinations.length > 0 && Object.keys(problems).length === 0;
   const planned =
     post.scheduledAt && new Date(post.scheduledAt).getTime() > Date.now() ? post.scheduledAt : null;
   const canQueue =
@@ -684,13 +781,14 @@ function PublishingPanel({
         <div className="preview-queue-action">
           <p>
             {planned
-              ? `Queue this approved image for ${indiaDate(planned)} IST.`
-              : 'Queue this approved image for the next publishing run.'}
+              ? `Queue this approved revision for ${indiaDate(planned)} IST.`
+              : 'Queue this approved revision for the next publishing run.'}
           </p>
           {!eligible && (
             <p className="preview-error">
-              A connected school account, saved image and supported image Post are required. Update
-              the draft and review the new revision.
+              {Object.values(problems)[0] ||
+                'Choose an eligible connected account and supported content before queueing this revision.'}{' '}
+              Update the draft and review the new revision.
             </p>
           )}
           {confirmQueue ? (
@@ -746,7 +844,11 @@ function PublishingPanel({
               <article className="preview-job" key={job.id}>
                 <div>
                   <strong>{job.accountName}</strong>
-                  <Badge tone={info.tone}>{info.label}</Badge>
+                  <Badge tone={info.tone}>
+                    {job.status === 'published' && job.platform === 'youtube'
+                      ? 'Upload confirmed'
+                      : info.label}
+                  </Badge>
                 </div>
                 <p>
                   Revision {job.revision} · {indiaDate(job.scheduledAt)} IST
@@ -754,15 +856,23 @@ function PublishingPanel({
                 {job.error && <p className="preview-job-error">{job.error}</p>}
                 {job.status === 'needs_reconciliation' && (
                   <p>
-                    Check the selected Instagram account before any further attempt. Delivery may
+                    Check the selected destination account before any further attempt. Delivery may
                     have succeeded; this job stays locked until its result is verified.
                   </p>
                 )}
                 {isManager && job.status === 'needs_reconciliation' && <ReconcileJob job={job} />}
                 {job.remoteId && <small>Provider record: {job.remoteId}</small>}
+                {(job.remoteVisibility || job.providerStatus) && (
+                  <div className="preview-provider-status">
+                    {job.remoteVisibility && (
+                      <Badge tone="violet">Visibility: {job.remoteVisibility}</Badge>
+                    )}
+                    {job.providerStatus && <Badge>Provider status: {job.providerStatus}</Badge>}
+                  </div>
+                )}
                 {remote && job.status === 'published' && (
                   <a href={remote.href} target="_blank" rel="noopener noreferrer">
-                    View published post <ArrowUpRight size={13} />
+                    View provider result <ArrowUpRight size={13} />
                   </a>
                 )}
                 {isManager &&
@@ -826,15 +936,15 @@ function ReconcileJob({ job }: { job: PublicationJob }) {
   const [error, setError] = useState('');
   async function verify(event: FormEvent) {
     event.preventDefault();
-    if (!checked || !/^\d{1,40}$/.test(remoteId.trim())) {
-      setError('Inspect the post and enter its numeric Instagram media ID.');
+    if (!checked || !/^[A-Za-z0-9_:/.-]{1,256}$/.test(remoteId.trim())) {
+      setError('Inspect the destination account and enter the exact provider record ID.');
       return;
     }
     setBusy(true);
     setError('');
     try {
       await mutate(`/publications/${job.id}/reconcile`, 'POST', { remoteId: remoteId.trim() });
-      toast('The provider confirmed this published post.');
+      toast('The provider verified this delivery result.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'The provider could not verify this result.');
     } finally {
@@ -843,23 +953,31 @@ function ReconcileJob({ job }: { job: PublicationJob }) {
   }
   return (
     <details className="preview-reconcile">
-      <summary>Verify an existing Instagram post</summary>
+      <summary>Verify an existing provider result</summary>
       <form onSubmit={verify}>
         <p>
-          Inspect the image and caption on {job.accountName}. The server will check the post’s
-          account, caption and publication time.
+          Inspect the saved media and caption on {job.accountName}. The server checks the provider
+          record against this approved job. A platform may restrict verification access.
         </p>
         <label>
-          Instagram media ID
+          {providerNames[job.platform]} record ID
           <input
             value={remoteId}
             onChange={(event) => setRemoteId(event.target.value)}
             disabled={busy}
-            inputMode="numeric"
-            pattern="[0-9]{1,40}"
-            maxLength={40}
+            maxLength={256}
             required
-            placeholder="Numeric ID from Instagram’s media record"
+            placeholder={
+              job.platform === 'instagram'
+                ? 'Numeric Instagram media ID'
+                : job.platform === 'youtube'
+                  ? 'YouTube video ID'
+                  : job.platform === 'linkedin'
+                    ? 'urn:li:share:… or urn:li:ugcPost:…'
+                    : job.platform === 'google_business'
+                      ? 'accounts/…/locations/…/localPosts/…'
+                      : 'Facebook post or photo ID'
+            }
           />
         </label>
         <label>
@@ -870,7 +988,7 @@ function ReconcileJob({ job }: { job: PublicationJob }) {
             required
             onChange={(event) => setChecked(event.target.checked)}
           />
-          I checked that the published image and caption match this approved revision.
+          I checked that the delivered media, caption, and destination match this approved revision.
         </label>
         {error && (
           <p className="preview-error" role="alert">
@@ -1047,7 +1165,8 @@ function ReviewConversation({ post }: { post: Post }) {
                     const labels: [keyof Post, string][] = [
                       ['title', 'Title'],
                       ['caption', 'Caption'],
-                      ['assetId', 'Image'],
+                      ['assetIds', 'Media and order'],
+                      ['publicationOptions', 'Publication settings'],
                       ['destinationIds', 'Destinations'],
                       ['platforms', 'Channels'],
                       ['institution', 'School'],

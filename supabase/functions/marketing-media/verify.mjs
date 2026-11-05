@@ -59,4 +59,4 @@ export async function readLimitedBody(request, limit = 4_300_000) {
 }
 
 export const validAssetPath = (path) =>
-  typeof path === 'string' && /^assets\/[A-Za-z0-9_-]{6,160}\.jpg$/.test(path);
+  typeof path === 'string' && /^assets\/[A-Za-z0-9_-]{6,160}\.(?:jpg|mp4)$/.test(path);

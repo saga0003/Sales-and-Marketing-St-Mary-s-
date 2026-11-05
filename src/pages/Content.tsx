@@ -42,7 +42,7 @@ const statusNames: Record<PostStatus, string> = {
   changes_requested: 'Changes requested',
   approved: 'Approved',
   scheduled: 'Scheduled',
-  published: 'Published',
+  published: 'Delivered',
   rejected: 'Rejected',
 };
 
@@ -615,7 +615,11 @@ export default function Content({ initialTab = 'library' }: { initialTab?: Conte
                         >
                           {job.status === 'needs_reconciliation'
                             ? 'Check confirmation'
-                            : job.status.replaceAll('_', ' ')}
+                            : job.status === 'published'
+                              ? job.platform === 'youtube'
+                                ? 'Upload confirmed'
+                                : 'Delivery confirmed'
+                              : job.status.replaceAll('_', ' ')}
                         </Badge>
                         <ChevronRight size={14} />
                       </button>

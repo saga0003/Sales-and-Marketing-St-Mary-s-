@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
+  ArrowDown,
+  ArrowUp,
   CalendarClock,
   Check,
   ChevronRight,
@@ -14,17 +16,27 @@ import {
   X,
 } from 'lucide-react';
 import { useWorkspace } from '../lib/workspace';
-import { institutions, type Platform, type Post, type PostInput } from '../lib/types';
+import {
+  institutions,
+  type Platform,
+  type Post,
+  type PostInput,
+  type PublicationOptions,
+} from '../lib/types';
 import { Badge, Button, Modal, PlatformIcon, platformNames } from './UI';
 import PostPreview from './PostPreview';
-import MediaLibrary, { assetImageUrl, formatFileSize } from './MediaLibrary';
+import MediaLibrary, { MediaThumbnail, formatFileSize } from './MediaLibrary';
 import '../styles/content.css';
+import { canPublish, providerNames, providerPlatform } from '../lib/providers';
+import { captionLimit, publicationIssues } from '../lib/publishing';
 
 type ComposerForm = Omit<PostInput, 'scheduledAt' | 'revision'> & {
   scheduledAt: string;
   sourceUrl: string;
   mediaUrl: string;
   assetId: string | null;
+  assetIds: string[];
+  publicationOptions: PublicationOptions;
   destinationIds: string[];
 };
 type Intent = 'save' | 'review';
@@ -60,7 +72,26 @@ function readBrowserDraft(key: string): BrowserDraft | null {
       (form.assetId !== null && typeof form.assetId !== 'string')
     )
       return null;
-    return saved;
+    if (
+      form.assetIds !== undefined &&
+      (!Array.isArray(form.assetIds) ||
+        form.assetIds.length > 10 ||
+        !form.assetIds.every((id) => typeof id === 'string'))
+    )
+      return null;
+    if (
+      form.publicationOptions !== undefined &&
+      (typeof form.publicationOptions !== 'object' || form.publicationOptions === null)
+    )
+      return null;
+    return {
+      ...saved,
+      form: {
+        ...form,
+        assetIds: form.assetIds || (form.assetId ? [form.assetId] : []),
+        publicationOptions: form.publicationOptions || {},
+      },
+    };
   } catch {
     return null;
   }
@@ -105,7 +136,9 @@ function initialForm(post?: Post): ComposerForm {
     palette: post?.palette || 'violet',
     sourceUrl: post?.sourceUrl || '',
     mediaUrl: post?.mediaUrl || '',
-    assetId: post?.assetId || null,
+    assetId: post?.assetIds?.[0] || post?.assetId || null,
+    assetIds: post?.assetIds || (post?.assetId ? [post.assetId] : []),
+    publicationOptions: post?.publicationOptions || {},
     destinationIds: post?.destinationIds || [],
   };
 }
@@ -158,14 +191,22 @@ export default function PostComposer({ post, onClose }: { post?: Post; onClose: 
   const changesRequireReview =
     !!currentPost && ['approved', 'scheduled', 'in_review'].includes(currentPost.status);
   const unchangedReviewedPost = !dirty && changesRequireReview;
-  const selectedAsset = data.mediaAssets.find((asset) => asset.id === form.assetId);
+  const selectedAssets = form.assetIds
+    .map((id) => data.mediaAssets.find((asset) => asset.id === id))
+    .filter((asset): asset is import('../lib/types').MediaAsset => !!asset);
   const destinationOptions = data.connections.filter(
     (connection) =>
-      connection.provider === 'instagram' &&
+      canPublish(connection.capabilities) &&
+      form.platforms.includes(providerPlatform(connection.provider)!) &&
       connection.status === 'connected' &&
       connection.institution === form.institution &&
       !!connection.accountId,
   );
+  const selectedConnections = destinationOptions.filter((connection) =>
+    form.destinationIds.includes(connection.id),
+  );
+  const hasYouTube = selectedConnections.some((connection) => connection.provider === 'youtube');
+  const selectedCaptionLimit = captionLimit(selectedConnections);
   const unavailableDestinations = form.destinationIds.filter(
     (id) => !destinationOptions.some((connection) => connection.id === id),
   );
@@ -241,10 +282,19 @@ export default function PostComposer({ post, onClose }: { post?: Post; onClose: 
     setForm((current) => ({
       ...current,
       [field]: value,
+      ...(field === 'assetIds' ? { assetId: (value as string[])[0] || null, mediaUrl: '' } : {}),
       ...(field === 'institution'
         ? { destinationIds: [] }
-        : field === 'platforms' && !(value as Platform[]).includes('instagram')
-          ? { destinationIds: [] }
+        : field === 'platforms'
+          ? {
+              destinationIds: current.destinationIds.filter((id) => {
+                const connection = data.connections.find((item) => item.id === id);
+                return (
+                  connection &&
+                  (value as Platform[]).includes(providerPlatform(connection.provider)!)
+                );
+              }),
+            }
           : {}),
     }));
     setErrors((current) => ({ ...current, [field]: undefined }));
@@ -282,31 +332,14 @@ export default function PostComposer({ post, onClose }: { post?: Post; onClose: 
     if (form.caption.length > 12000)
       next.caption = 'Keep your workspace draft within 12,000 characters.';
     if (!form.platforms.length) next.platforms = 'Choose at least one channel.';
-    if (form.assetId && !selectedAsset)
-      next.assetId = 'This saved image is unavailable. Choose another image or remove it.';
+    if (form.assetIds.length !== selectedAssets.length)
+      next.assetIds = 'Some saved media is unavailable. Choose another file or remove it.';
     if (form.destinationIds.length) {
       if (unavailableDestinations.length)
         next.destinationIds =
-          'A selected account is unavailable or belongs to another school. Remove it and choose a connected destination.';
-      if (!form.platforms.includes('instagram'))
-        next.destinationIds = 'Select Instagram to use these destination accounts.';
-      if (intent === 'review' && form.format !== 'Post')
-        next.format =
-          'Connected publishing supports one image Post in this release. Choose Post or remove the destination for planning only.';
-      if (intent === 'review' && !form.assetId)
-        next.assetId =
-          'Choose a saved library image before submitting a post with a publishing destination.';
-      if (
-        intent === 'review' &&
-        selectedAsset &&
-        (selectedAsset.width < 320 ||
-          selectedAsset.width / selectedAsset.height < 0.8 ||
-          selectedAsset.width / selectedAsset.height > 1.91)
-      )
-        next.assetId =
-          'For Instagram, use an image at least 320 pixels wide with a ratio between 4:5 and 1.91:1. Choose a suitable image from the library.';
-      if (intent === 'review' && form.caption.length > 2200)
-        next.caption = 'Instagram image captions must fit within 2,200 characters.';
+          'A selected account is unavailable or belongs to another school or channel. Remove it and choose a connected destination.';
+      if (intent === 'review')
+        Object.assign(next, publicationIssues(form, data.connections, data.mediaAssets));
     }
     if (form.sourceUrl.trim() && !validWebUrl(form.sourceUrl.trim()))
       next.sourceUrl = 'Use a complete https:// or http:// source link without credentials.';
@@ -347,7 +380,9 @@ export default function PostComposer({ post, onClose }: { post?: Post; onClose: 
           scheduledAt: dateToIso(form.scheduledAt),
           sourceUrl: form.sourceUrl.trim(),
           mediaUrl: form.mediaUrl.trim(),
-          assetId: form.assetId,
+          assetId: form.assetIds[0] || null,
+          assetIds: form.assetIds,
+          publicationOptions: form.publicationOptions,
           destinationIds: form.destinationIds,
         };
         saved = saved
@@ -598,7 +633,8 @@ export default function PostComposer({ post, onClose }: { post?: Post; onClose: 
                   <span id="composer-caption-help">Write in your school’s voice.</span>
                   <span>
                     {form.caption.length.toLocaleString('en-IN')} /{' '}
-                    {form.destinationIds.length ? '2,200 for Instagram' : '12,000'}
+                    {selectedCaptionLimit.toLocaleString('en-IN')}
+                    {form.destinationIds.length ? ' for selected accounts' : ''}
                   </span>
                 </div>
                 {errors.caption && (
@@ -740,50 +776,109 @@ export default function PostComposer({ post, onClose }: { post?: Post; onClose: 
                     {errors.format}
                   </p>
                 )}
-                <div className="composer-media-field" id="composer-assetId" tabIndex={-1}>
+                <div className="composer-media-field" id="composer-assetIds" tabIndex={-1}>
                   <div className="composer-media-heading">
                     <span>
                       <Images size={16} />
-                      Post image
+                      Post media
                     </span>
-                    <Badge tone={selectedAsset ? 'green' : 'gray'}>
-                      {selectedAsset ? 'Saved in library' : 'Optional for planning'}
+                    <Badge tone={selectedAssets.length ? 'green' : 'gray'}>
+                      {selectedAssets.length
+                        ? `${selectedAssets.length} saved file${selectedAssets.length === 1 ? '' : 's'}`
+                        : 'Optional for text posts'}
                     </Badge>
                   </div>
-                  {selectedAsset ? (
-                    <div className="composer-selected-media">
-                      <img
-                        src={assetImageUrl(selectedAsset) || undefined}
-                        alt={selectedAsset.name}
-                      />
-                      <div>
-                        <strong>{selectedAsset.name}</strong>
-                        <span>
-                          {selectedAsset.width} × {selectedAsset.height} ·{' '}
-                          {formatFileSize(selectedAsset.size)}
-                        </span>
-                        <small>Your reviewer sees this exact saved image.</small>
-                      </div>
-                      <button
-                        className="icon-button"
-                        type="button"
-                        aria-label="Remove post image"
-                        disabled={!!busy || readOnly}
-                        onClick={() => update('assetId', null)}
-                      >
-                        <X size={16} />
-                      </button>
+                  {selectedAssets.length ? (
+                    <div className="composer-media-list">
+                      {form.assetIds.map((id, index) => {
+                        const asset = data.mediaAssets.find((item) => item.id === id);
+                        return (
+                          <div className="composer-selected-media" key={id}>
+                            {asset ? <MediaThumbnail asset={asset} /> : <Images size={25} />}
+                            <div>
+                              <strong>{asset?.name || 'Unavailable media'}</strong>
+                              {asset && (
+                                <span>
+                                  {asset.width} × {asset.height} · {formatFileSize(asset.size)}
+                                  {asset.duration ? ` · ${Math.round(asset.duration)} seconds` : ''}
+                                </span>
+                              )}
+                              <small>
+                                {form.assetIds.length > 1 ? `Slide ${index + 1} · ` : ''}Your
+                                reviewer sees this saved file.
+                              </small>
+                            </div>
+                            <div className="composer-media-order">
+                              {form.assetIds.length > 1 && (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="icon-button"
+                                    disabled={!!busy || readOnly || index === 0}
+                                    aria-label={`Move slide ${index + 1} earlier`}
+                                    onClick={() => {
+                                      const next = [...form.assetIds];
+                                      [next[index - 1], next[index]] = [
+                                        next[index],
+                                        next[index - 1],
+                                      ];
+                                      update('assetIds', next);
+                                    }}
+                                  >
+                                    <ArrowUp size={15} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="icon-button"
+                                    disabled={
+                                      !!busy || readOnly || index === form.assetIds.length - 1
+                                    }
+                                    aria-label={`Move slide ${index + 1} later`}
+                                    onClick={() => {
+                                      const next = [...form.assetIds];
+                                      [next[index + 1], next[index]] = [
+                                        next[index],
+                                        next[index + 1],
+                                      ];
+                                      update('assetIds', next);
+                                    }}
+                                  >
+                                    <ArrowDown size={15} />
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                className="icon-button"
+                                type="button"
+                                aria-label={`Remove ${asset?.name || 'unavailable media'}`}
+                                disabled={!!busy || readOnly}
+                                onClick={() =>
+                                  update(
+                                    'assetIds',
+                                    form.assetIds.filter((item) => item !== id),
+                                  )
+                                }
+                              >
+                                <X size={16} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : (
-                    <p>Upload an image or reuse one from your team’s media library.</p>
+                    <p>
+                      Choose an image, a prepared MP4 video, or multiple images for a carousel. Text
+                      posts can be sent without media to supported accounts.
+                    </p>
                   )}
                   <Button disabled={!!busy || readOnly} onClick={() => setLibraryOpen(true)}>
                     <Images size={16} />
-                    {selectedAsset ? 'Change image' : 'Choose or upload an image'}
+                    {selectedAssets.length ? 'Choose saved media' : 'Choose or upload media'}
                   </Button>
-                  {errors.assetId && (
+                  {(errors.assetIds || errors.assetId) && (
                     <p className="composer-error" role="alert">
-                      {errors.assetId}
+                      {errors.assetIds || errors.assetId}
                     </p>
                   )}
                 </div>
@@ -799,7 +894,7 @@ export default function PostComposer({ post, onClose }: { post?: Post; onClose: 
                     Choose the exact school account for this revision. A manager reviews this
                     selection with the content.
                   </p>
-                  {form.platforms.includes('instagram') && destinationOptions.length ? (
+                  {destinationOptions.length ? (
                     destinationOptions.map((connection) => (
                       <label
                         key={connection.id}
@@ -818,11 +913,12 @@ export default function PostComposer({ post, onClose }: { post?: Post; onClose: 
                             )
                           }
                         />
-                        <PlatformIcon platform="instagram" size={22} />
+                        <PlatformIcon platform={providerPlatform(connection.provider)!} size={22} />
                         <span>
                           <strong>{connection.accountName}</strong>
                           <small>
-                            {connection.institution} · {connection.accountId}
+                            {providerNames[connection.provider]} · {connection.institution} ·{' '}
+                            {connection.accountId}
                           </small>
                         </span>
                         {form.destinationIds.includes(connection.id) && <Check size={16} />}
@@ -832,9 +928,8 @@ export default function PostComposer({ post, onClose }: { post?: Post; onClose: 
                     <div className="composer-destination-empty">
                       <ShieldCheck size={18} />
                       <span>
-                        {!form.platforms.includes('instagram')
-                          ? 'Select Instagram above to choose a publishing account.'
-                          : 'No Instagram account is connected for this school yet. You can save and review content now; connect an account in Settings when ready.'}
+                        No eligible account is connected for these channels and this school. Save
+                        and review content now, then connect accounts in Settings when ready.
                       </span>
                     </div>
                   )}
@@ -867,10 +962,94 @@ export default function PostComposer({ post, onClose }: { post?: Post; onClose: 
                     </p>
                   )}
                   <small>
-                    Connected publishing currently supports a single Instagram image Post. Other
-                    channels and formats can be planned and reviewed here.
+                    Instagram supports image posts, image carousels, and video Reels. YouTube uses
+                    Video format. Facebook, LinkedIn, and Google Business use text posts with an
+                    optional image. Available actions depend on the connected account’s permissions.
                   </small>
                 </fieldset>
+                {hasYouTube && (
+                  <fieldset
+                    className="composer-youtube-options"
+                    id="composer-publicationOptions"
+                    tabIndex={-1}
+                  >
+                    <legend>YouTube publication settings</legend>
+                    <p>
+                      These choices are part of the exact revision your manager approves. The
+                      provider may apply additional restrictions to an unverified application.
+                    </p>
+                    <label className="field">
+                      Video visibility
+                      <select
+                        disabled={!!busy || readOnly}
+                        value={form.publicationOptions.youtubePrivacy || ''}
+                        onChange={(event) =>
+                          update('publicationOptions', {
+                            ...form.publicationOptions,
+                            youtubePrivacy: (event.target.value ||
+                              undefined) as PublicationOptions['youtubePrivacy'],
+                          })
+                        }
+                      >
+                        <option value="">Choose visibility…</option>
+                        <option value="private">Private — only permitted viewers</option>
+                        <option value="unlisted">Unlisted — anyone with the link</option>
+                        <option value="public">Public — visible on YouTube</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      Video audience
+                      <select
+                        required
+                        disabled={!!busy || readOnly}
+                        value={
+                          typeof form.publicationOptions.madeForKids === 'boolean'
+                            ? String(form.publicationOptions.madeForKids)
+                            : ''
+                        }
+                        onChange={(event) =>
+                          update('publicationOptions', {
+                            ...form.publicationOptions,
+                            madeForKids:
+                              event.target.value === '' ? undefined : event.target.value === 'true',
+                          })
+                        }
+                      >
+                        <option value="">Choose the applicable audience…</option>
+                        <option value="true">Made for children</option>
+                        <option value="false">Not made for children</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      Contains altered or synthetic media?
+                      <select
+                        required
+                        disabled={!!busy || readOnly}
+                        value={
+                          typeof form.publicationOptions.containsSyntheticMedia === 'boolean'
+                            ? String(form.publicationOptions.containsSyntheticMedia)
+                            : ''
+                        }
+                        onChange={(event) =>
+                          update('publicationOptions', {
+                            ...form.publicationOptions,
+                            containsSyntheticMedia:
+                              event.target.value === '' ? undefined : event.target.value === 'true',
+                          })
+                        }
+                      >
+                        <option value="">Choose…</option>
+                        <option value="true">Yes</option>
+                        <option value="false">No</option>
+                      </select>
+                    </label>
+                    {errors.publicationOptions && (
+                      <p className="composer-error" role="alert">
+                        {errors.publicationOptions}
+                      </p>
+                    )}
+                  </fieldset>
+                )}
                 {!form.assetId && (
                   <details className="composer-external-media">
                     <summary>Use an external image for a planning preview</summary>
@@ -1056,14 +1235,31 @@ export default function PostComposer({ post, onClose }: { post?: Post; onClose: 
       </Modal>
       {libraryOpen && (
         <MediaLibrary
-          selectedId={form.assetId}
-          retainedAssetId={savedPost?.ownerId === data.user.id ? savedPost.assetId : null}
+          selectedIds={form.assetIds}
+          retainedAssetIds={
+            savedPost?.ownerId === data.user.id
+              ? savedPost.assetIds || (savedPost.assetId ? [savedPost.assetId] : [])
+              : []
+          }
+          mediaKind={form.format === 'Video' || form.format === 'Reel' ? 'video' : 'image'}
+          maxSelect={form.format === 'Carousel' ? 10 : 1}
           onClose={() => setLibraryOpen(false)}
-          onSelect={(asset) => {
-            setForm((current) => ({ ...current, assetId: asset.id, mediaUrl: '' }));
-            setErrors((current) => ({ ...current, assetId: undefined }));
-            setLibraryOpen(false);
-          }}
+          {...(form.format === 'Carousel'
+            ? {
+                onSelectMany: (assets: import('../lib/types').MediaAsset[]) => {
+                  update(
+                    'assetIds',
+                    assets.map((asset) => asset.id),
+                  );
+                  setLibraryOpen(false);
+                },
+              }
+            : {
+                onSelect: (asset: import('../lib/types').MediaAsset) => {
+                  update('assetIds', [asset.id]);
+                  setLibraryOpen(false);
+                },
+              })}
         />
       )}
     </>

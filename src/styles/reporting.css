@@ -1,0 +1,221 @@
+.platform-analytics {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+.report-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.report-section-heading h2 {
+  font-size: 1.5rem;
+  line-height: 1.35;
+}
+.report-section-heading p {
+  margin-top: 0.35rem;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.6;
+  max-width: 72ch;
+}
+.report-controls {
+  padding: 1.1rem;
+  display: grid;
+  grid-template-columns: minmax(15rem, 2.5fr) minmax(10rem, 1fr) minmax(10rem, 1fr) auto;
+  gap: 0.8rem;
+  align-items: end;
+}
+.report-controls .field {
+  min-width: 0;
+}
+.report-controls input,
+.report-controls select {
+  width: 100%;
+}
+.report-explanation,
+.report-pending-range {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+.report-pending-range {
+  padding: 0.7rem 1rem;
+  border-radius: 0.75rem;
+  background: #fff5df;
+  color: #805c22;
+}
+.report-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  padding: 1rem;
+  background: #fff4e8;
+  border: 1px solid #efddbd;
+  border-radius: 0.9rem;
+}
+.report-warning > span {
+  flex: 1;
+  min-width: 12rem;
+}
+.report-provenance {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.report-provenance > div {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.report-provenance strong {
+  font-size: 1.125rem;
+}
+.report-provenance span,
+.report-provenance small {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+.report-provenance small {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+.report-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 1rem;
+}
+.report-metric {
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.report-metric > span {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+.report-metric strong {
+  font-size: 1.75rem;
+  line-height: 1.25;
+  letter-spacing: -0.035em;
+  overflow-wrap: anywhere;
+}
+.report-metric small {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+.report-table-panel {
+  overflow: hidden;
+}
+.report-table-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 1.2rem;
+}
+.report-table-heading h3 {
+  font-size: 1.125rem;
+}
+.report-table-heading p {
+  margin-top: 0.3rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+.report-table-heading select {
+  width: auto;
+  max-width: 100%;
+}
+.report-table-scroll {
+  overflow: auto;
+  max-height: 34rem;
+}
+.report-table-scroll table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+.report-table-scroll th {
+  padding: 0.85rem 1.2rem;
+  background: #f5f3fa;
+  font-weight: 600;
+  white-space: nowrap;
+  font-size: 0.875rem;
+  position: sticky;
+  top: 0;
+}
+.report-table-scroll td {
+  padding: 0.85rem 1.2rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  min-width: 6rem;
+  max-width: 24rem;
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+.report-table-scroll td a {
+  color: var(--violet);
+  text-decoration: underline;
+}
+.report-table-empty {
+  padding: 1.5rem;
+  color: var(--muted);
+  font-size: 1rem;
+}
+.report-methodology {
+  padding: 1.2rem;
+  border: 1px solid #e7e1f4;
+  border-radius: 1rem;
+  background: #f3f0fa;
+}
+.report-methodology h3 {
+  font-size: 1rem;
+}
+.report-methodology ul {
+  padding-left: 1.25rem;
+  margin: 0.6rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  color: #696175;
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+@media (max-width: 75rem) {
+  .report-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+  .report-controls .field:first-child {
+    grid-column: 1/-1;
+  }
+  .report-controls > .button {
+    grid-column: 1/-1;
+  }
+}
+@media (max-width: 40rem) {
+  .report-controls {
+    grid-template-columns: 1fr;
+  }
+  .report-controls .field:first-child,
+  .report-controls > .button {
+    grid-column: auto;
+  }
+  .report-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.7rem;
+  }
+  .report-metric {
+    padding: 1rem;
+  }
+  .report-metric strong {
+    font-size: 1.5rem;
+  }
+}

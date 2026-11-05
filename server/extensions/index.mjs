@@ -1,11 +1,13 @@
 import express from 'express';
-import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 import { transaction, getPost, audit } from '../database.mjs';
 import { HttpError, parse } from '../validation.mjs';
 import { createVault, opaqueId, hash, secretEqual } from './crypto.mjs';
 import { PROVIDERS, ProviderError, createProviderClient } from './providers.mjs';
+import { PROVIDER_IDS, providerGroup, credentialKey } from './provider-definitions.mjs';
+import { migrateExtensions } from './migrate.mjs';
+import { createReporting } from './reporting.mjs';
 import {
   MAX_IMAGE_BYTES,
   IMAGE_TYPES,
@@ -16,7 +18,7 @@ import {
 } from './storage.mjs';
 import { createPublishing, publicJob } from './publishing.mjs';
 
-const providerId = z.enum(['google', 'instagram']);
+const providerId = z.enum(PROVIDER_IDS);
 const institutionName = z.string().trim().min(1).max(180);
 const date = z
   .string()
@@ -41,6 +43,9 @@ const publicConnection = (row) => ({
   createdAt: row.created_at,
   lastTestAt: row.last_test_at,
   lastSyncAt: row.last_sync_at,
+  autoSync: Number(row.auto_sync) === 1,
+  syncIntervalHours: Number(row.sync_interval_hours || 24),
+  nextSyncAt: row.next_sync_at ?? null,
   error: row.error,
 });
 
@@ -48,27 +53,7 @@ export async function registerExtensions(
   app,
   { db, config, now, requireAuth, requireManager, options = {} },
 ) {
-  const extensionVersion = '1';
-  const schemaMarker = () =>
-    db
-      .prepare(
-        "SELECT value FROM workspace_metadata WHERE key = 'provider_extensions_schema_version'",
-      )
-      .get();
-  if (config.migrate !== false) {
-    await transaction(db, async () => {
-      if (db.kind === 'postgres')
-        await db
-          .prepare('SELECT pg_advisory_xact_lock(hashtext(?))')
-          .get(`smis:${db.schema}:migrations`);
-      if ((await schemaMarker())?.value !== extensionVersion)
-        await db.exec(await readFile(new URL('./schema.sql', import.meta.url), 'utf8'));
-    });
-  } else if ((await schemaMarker())?.value !== extensionVersion) {
-    throw new Error(
-      'Provider extension database migration required. Apply server/extensions/schema.sql with a migration role before deploying this release.',
-    );
-  }
+  await migrateExtensions(db, config);
   const vault = createVault(options.encryptionKey ?? process.env.CREDENTIAL_ENCRYPTION_KEY);
   let origin = options.appOrigin ?? config.publicOrigin ?? process.env.APP_ORIGIN;
   if (origin) {
@@ -94,6 +79,8 @@ export async function registerExtensions(
       fetch: options.fetch,
       now,
       metaVersion: options.metaVersion ?? process.env.META_API_VERSION ?? 'v25.0',
+      googleAdsVersion: options.googleAdsVersion ?? process.env.GOOGLE_ADS_API_VERSION ?? 'v26',
+      linkedinVersion: options.linkedinVersion ?? process.env.LINKEDIN_API_VERSION ?? '202610',
     });
   const brokerUrl = options.mediaBrokerUrl ?? process.env.MEDIA_BROKER_URL;
   const brokerKey = options.mediaBrokerPrivateKey ?? process.env.MEDIA_BROKER_PRIVATE_KEY;
@@ -123,12 +110,14 @@ export async function registerExtensions(
   }
   async function connectionSettings(id) {
     requireVault();
+    const key = credentialKey(id);
+    if (!key) throw new HttpError(422, 'Unsupported provider.', 'provider_not_supported');
     const saved = await db
       .prepare('SELECT encrypted_credentials FROM provider_settings WHERE provider = ?')
-      .get(id);
+      .get(key);
     if (saved) {
       try {
-        return vault.open(saved.encrypted_credentials, `provider:${id}`);
+        return vault.open(saved.encrypted_credentials, `provider:${key}`);
       } catch {
         throw new HttpError(
           503,
@@ -137,16 +126,32 @@ export async function registerExtensions(
         );
       }
     }
-    const clientId = id === 'google' ? process.env.GOOGLE_CLIENT_ID : process.env.META_APP_ID;
+    const family = providerGroup(id);
+    const clientId =
+      family === 'google'
+        ? process.env.GOOGLE_CLIENT_ID
+        : family === 'meta'
+          ? process.env.META_APP_ID
+          : process.env.LINKEDIN_CLIENT_ID;
     const clientSecret =
-      id === 'google' ? process.env.GOOGLE_CLIENT_SECRET : process.env.META_APP_SECRET;
+      family === 'google'
+        ? process.env.GOOGLE_CLIENT_SECRET
+        : family === 'meta'
+          ? process.env.META_APP_SECRET
+          : process.env.LINKEDIN_CLIENT_SECRET;
     if (!clientId || !clientSecret)
       throw new HttpError(
         409,
         'Save this provider’s application credentials before connecting an account.',
         'provider_setup_required',
       );
-    return { clientId, clientSecret };
+    return {
+      clientId,
+      clientSecret,
+      ...(family === 'google' && process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID
+        ? { loginCustomerId: process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID }
+        : {}),
+    };
   }
   async function setup(user) {
     const result = [];
@@ -196,13 +201,17 @@ export async function registerExtensions(
       );
     }
     if (current.expiresAt && current.expiresAt <= now().getTime() + 60000) {
-      if (connection.provider !== 'google')
+      if (providerGroup(connection.provider) === 'meta')
         throw new ProviderError(
           'Meta authorization has expired. Reconnect this account.',
           'reauthorization_required',
           { reauthenticate: true },
         );
-      current = await provider.refresh(await connectionSettings('google'), current);
+      current = await provider.refresh(
+        await connectionSettings(connection.provider),
+        current,
+        connection.provider,
+      );
       const ciphertext = vault.seal(current, `connection:${connection.id}`);
       const updated = await db
         .prepare(
@@ -216,7 +225,7 @@ export async function registerExtensions(
     }
     return current;
   }
-  async function withProvider(connection, fn) {
+  async function withProvider(connection, fn, { reportLeaseId = null } = {}) {
     try {
       return await fn(
         await loadConnectionCredentials(connection),
@@ -224,11 +233,16 @@ export async function registerExtensions(
       );
     } catch (error) {
       if (error instanceof ProviderError || error?.code === 'reauthorization_required') {
+        const needsAttention =
+          error.reauthenticate ||
+          ['reauthorization_required', 'permission_denied', 'invalid_token_response'].includes(
+            error.code,
+          );
         await db
           .prepare(
-            "UPDATE service_connections SET status = 'needs_attention', error = ? WHERE id = ? AND status <> 'disconnected'",
+            "UPDATE service_connections SET status = CASE WHEN ? = 1 THEN 'needs_attention' ELSE status END, error = ? WHERE id = ? AND status <> 'disconnected' AND (CAST(? AS TEXT) IS NULL OR sync_lease_id = ?)",
           )
-          .run(error.message, connection.id);
+          .run(needsAttention ? 1 : 0, error.message, connection.id, reportLeaseId, reportLeaseId);
         throw new HttpError(
           error.code === 'provider_rate_limited' ? 429 : 409,
           error.message,
@@ -238,6 +252,7 @@ export async function registerExtensions(
       throw error;
     }
   }
+  const reporting = createReporting({ db, now, provider, withProvider, requireConnection });
   const publishing = createPublishing({
     db,
     now,
@@ -280,28 +295,83 @@ export async function registerExtensions(
   app.put('/api/connections/providers/:provider', ...manager, async (request, response) => {
     requireVault();
     const id = parse(providerId, request.params.provider);
+    const key = credentialKey(id);
     const input = parse(
       z
         .object({
-          clientId: z.string().trim().min(3).max(512),
-          clientSecret: z.string().trim().min(8).max(4096),
+          clientId: z.string().trim().min(3).max(512).optional(),
+          clientSecret: z.string().trim().min(8).max(4096).optional(),
+          loginCustomerId: z
+            .string()
+            .regex(/^\d{10}$/)
+            .optional(),
+          developerToken: z.string().trim().min(8).max(256).optional(),
         })
-        .strict(),
+        .strict()
+        .refine(
+          (value) => Object.values(value).some((item) => item !== undefined),
+          'Provide an application setting to save.',
+        ),
       request.body,
     );
+    if (providerGroup(id) !== 'google' && (input.loginCustomerId || input.developerToken))
+      throw new HttpError(
+        422,
+        'Google Ads settings belong to the Google application group.',
+        'invalid_provider_settings',
+      );
+    let previous = {};
+    try {
+      previous = await connectionSettings(id);
+    } catch (error) {
+      if (error.code !== 'provider_setup_required') throw error;
+    }
+    const merged = {
+      ...previous,
+      ...Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)),
+    };
+    if (!merged.clientId || !merged.clientSecret)
+      throw new HttpError(
+        422,
+        'Enter both the client ID and client secret for the first application setup.',
+        'provider_setup_required',
+      );
+    const family = PROVIDER_IDS.filter((item) => credentialKey(item) === key);
     await transaction(db, async () => {
+      for (const service of family) {
+        for (const connection of await db
+          .prepare(
+            "SELECT id FROM service_connections WHERE provider = ? AND status <> 'disconnected'",
+          )
+          .all(service))
+          await connectionUnlocked(connection.id, { renew: previous.clientId === merged.clientId });
+      }
       await db
         .prepare(
           'INSERT INTO provider_settings(provider, encrypted_credentials, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(provider) DO UPDATE SET encrypted_credentials = excluded.encrypted_credentials, updated_by = excluded.updated_by, updated_at = excluded.updated_at',
         )
-        .run(id, vault.seal(input, `provider:${id}`), request.auth.user.id, stamp());
-      await db.prepare('DELETE FROM oauth_authorizations WHERE provider = ?').run(id);
+        .run(key, vault.seal(merged, `provider:${key}`), request.auth.user.id, stamp());
+      for (const service of family) {
+        await db.prepare('DELETE FROM oauth_authorizations WHERE provider = ?').run(service);
+        if (previous.clientId && previous.clientId !== merged.clientId) {
+          await db
+            .prepare(
+              "UPDATE service_connections SET status = 'needs_attention', error = 'The developer application changed. Reconnect this account.' WHERE provider = ? AND status <> 'disconnected'",
+            )
+            .run(service);
+          await db
+            .prepare(
+              "UPDATE publication_jobs SET status = 'cancelled', error = 'The developer application changed. Reconnect before queuing.', updated_at = ? WHERE connection_id IN (SELECT id FROM service_connections WHERE provider = ?) AND status IN ('queued','failed')",
+            )
+            .run(stamp(), service);
+        }
+      }
       await audit(
         db,
         request.auth.user,
         'Provider application configured',
         id,
-        'Application credentials were saved encrypted on the server.',
+        `Application settings for the ${providerGroup(id)} group were saved encrypted on the server.`,
         stamp(),
       );
     });
@@ -414,7 +484,7 @@ export async function registerExtensions(
           .run(
             connectionId,
             id,
-            id === 'google' ? 'Select a GA4 property' : 'Select an Instagram account',
+            `Select a ${PROVIDERS[id].name} account`,
             pending.institution,
             vault.seal(tokens, `connection:${connectionId}`),
             request.auth.user.id,
@@ -445,17 +515,21 @@ export async function registerExtensions(
       provider.discover(connection.provider, current, credentials),
     );
     response.json({
-      accounts: accounts.map(({ id, name, kind, platform, timezone }) => ({
+      accounts: accounts.map(({ id, name, kind, platform, timezone, capabilities }) => ({
         id,
         name,
         kind,
         ...(platform ? { platform } : {}),
         ...(timezone ? { timezone } : {}),
+        ...(capabilities ? { capabilities } : {}),
       })),
     });
   });
   app.post('/api/connections/:id/select', ...manager, async (request, response) => {
-    const input = parse(z.object({ accountId: z.string().min(1).max(120) }).strict(), request.body);
+    const input = parse(
+      z.object({ accountId: z.string().min(1).max(2048) }).strict(),
+      request.body,
+    );
     const connection = await requireConnection(request.params.id);
     const current = await loadConnectionCredentials(connection);
     const accounts = await withProvider(connection, (_current, credentials) =>
@@ -479,6 +553,7 @@ export async function registerExtensions(
         );
       const credentials = {
         ...current,
+        ...(account.credentials ?? {}),
         ...(account.pageAccessToken
           ? { pageAccessToken: account.pageAccessToken, pageId: account.pageId }
           : {}),
@@ -506,16 +581,12 @@ export async function registerExtensions(
       }
       await db
         .prepare(
-          "UPDATE service_connections SET account_id = ?, account_name = ?, status = 'connected', capabilities = ?, encrypted_credentials = ?, error = NULL, last_test_at = ? WHERE id = ?",
+          "UPDATE service_connections SET account_id = ?, account_name = ?, status = 'connected', capabilities = ?, encrypted_credentials = ?, error = NULL, last_test_at = ?, sync_lease_id = NULL, sync_lease_expires_at = NULL WHERE id = ?",
         )
         .run(
           account.id,
           account.name,
-          JSON.stringify(
-            connection.provider === 'google'
-              ? ['analytics:read']
-              : ['publish:image', 'account:read'],
-          ),
+          JSON.stringify(account.capabilities ?? PROVIDERS[connection.provider].capabilities),
           vault.seal(credentials, `connection:${target.id}`),
           stamp(),
           target.id,
@@ -545,73 +616,76 @@ export async function registerExtensions(
     response.json(publicConnection(await requireConnection(connection.id)));
   });
   app.post('/api/connections/:id/sync', ...manager, async (request, response) => {
-    const connection = await requireConnection(request.params.id, { connected: true });
-    if (connection.provider !== 'google')
-      throw new HttpError(
-        422,
-        'Instagram publication status is recorded per job. Social analytics import is not enabled in this version.',
-        'analytics_not_supported',
-      );
     const input = parse(
       z.object({ startDate: date.optional(), endDate: date.optional() }).strict(),
       request.body ?? {},
     );
-    const endDate =
-      input.endDate ?? new Date(now().getTime() - 86400000).toISOString().slice(0, 10);
-    const startDate =
-      input.startDate ??
-      new Date(Date.parse(`${endDate}T00:00:00Z`) - 29 * 86400000).toISOString().slice(0, 10);
-    if (
-      endDate < startDate ||
-      endDate > now().toISOString().slice(0, 10) ||
-      Date.parse(endDate) - Date.parse(startDate) > 89 * 86400000
-    )
-      throw new HttpError(
-        422,
-        'Choose a valid date range of at most 90 days ending today or earlier.',
-        'invalid_date_range',
-      );
-    const data = await withProvider(connection, (current) =>
-      provider.report(connection.account_id, current, startDate, endDate),
+    response.json(await reporting.syncOne(request.params.id, input, request.auth.user));
+  });
+  app.post('/api/connections/:id/sync-settings', ...manager, async (request, response) => {
+    const input = parse(
+      z
+        .object({
+          autoSync: z.boolean(),
+          syncIntervalHours: z.number().int().min(6).max(168).optional(),
+        })
+        .strict(),
+      request.body,
     );
-    const report = {
-      connectionId: connection.id,
-      accountName: connection.account_name,
-      institution: connection.institution,
-      provider: 'ga4',
-      startDate,
-      endDate,
-      importedAt: stamp(),
-      ...data,
+    response.json(
+      publicConnection(await reporting.saveSettings(request.params.id, input, request.auth.user)),
+    );
+  });
+  app.get('/api/connections/:id/report.csv', ...authenticated, async (request, response) => {
+    const connection = await requireConnection(request.params.id, { connected: true });
+    const table = connection.provider === 'google' ? 'website_reports' : 'platform_reports';
+    const saved = await db
+      .prepare(`SELECT report_json FROM ${table} WHERE connection_id = ?`)
+      .get(connection.id);
+    if (!saved)
+      throw new HttpError(404, 'Import a report before exporting it.', 'report_not_found');
+    const report = JSON.parse(saved.report_json);
+    const rows = [
+      ['Provider', report.provider],
+      ['Account', report.accountName],
+      ['Institution', report.institution],
+      ['Start date', report.startDate],
+      ['End date', report.endDate],
+      ['Imported at', report.importedAt],
+      ['Currency', report.currency || 'Not applicable'],
+      [],
+    ];
+    if (report.summary) {
+      rows.push(['Summary metric', 'Value', 'Unit']);
+      for (const item of report.summary) rows.push([item.label, item.value, item.unit || 'count']);
+      for (const section of report.tables) {
+        rows.push([], [section.label, section.truncated ? 'Limited rows' : '']);
+        rows.push(section.columns.map((item) => item.label));
+        for (const row of section.rows)
+          rows.push(section.columns.map((item) => row[item.key] ?? ''));
+      }
+      rows.push([], ['Report notes']);
+      for (const note of report.notes || []) rows.push([note]);
+    } else {
+      rows.push(['Metric', 'Value'], ...Object.entries(report.totals));
+      for (const key of ['daily', 'pages', 'sources']) {
+        rows.push([], [key]);
+        const columns = Object.keys(report[key][0] || {});
+        rows.push(columns, ...report[key].map((row) => columns.map((column) => row[column])));
+      }
+    }
+    const cell = (value) => {
+      const original = String(value ?? '');
+      const safe =
+        typeof value === 'string' && /^[=+@\-\t\r]/.test(original) ? `'${original}` : original;
+      return `"${safe.replaceAll('"', '""')}"`;
     };
-    await transaction(db, async () => {
-      const latest = await requireConnection(connection.id, { lock: true });
-      if (latest.account_id !== connection.account_id)
-        throw new HttpError(
-          409,
-          'This account changed during sync. Try again.',
-          'connection_changed',
-        );
-      await db
-        .prepare(
-          'INSERT INTO website_reports(connection_id, report_json, imported_at) VALUES (?, ?, ?) ON CONFLICT(connection_id) DO UPDATE SET report_json = excluded.report_json, imported_at = excluded.imported_at',
-        )
-        .run(connection.id, JSON.stringify(report), report.importedAt);
-      await db
-        .prepare(
-          "UPDATE service_connections SET status = 'connected', error = NULL, last_sync_at = ? WHERE id = ?",
-        )
-        .run(report.importedAt, connection.id);
-      await audit(
-        db,
-        request.auth.user,
-        'Website analytics imported',
-        connection.id,
-        `${connection.account_name}; ${startDate} to ${endDate}; read-only GA4 data.`,
-        stamp(),
-      );
-    });
-    response.json(report);
+    response
+      .set({
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${connection.provider}-report-${report.startDate}-${report.endDate}.csv"`,
+      })
+      .send('\uFEFF' + rows.map((row) => row.map(cell).join(',')).join('\r\n'));
   });
   app.delete('/api/connections/:id', ...manager, async (request, response) => {
     await transaction(db, async () => {
@@ -619,7 +693,7 @@ export async function registerExtensions(
       await connectionUnlocked(connection.id);
       await db
         .prepare(
-          "UPDATE service_connections SET status = 'disconnected', encrypted_credentials = NULL, capabilities = '[]', error = NULL WHERE id = ?",
+          "UPDATE service_connections SET status = 'disconnected', encrypted_credentials = NULL, capabilities = '[]', error = NULL, auto_sync = 0, next_sync_at = NULL, sync_lease_id = NULL, sync_lease_expires_at = NULL WHERE id = ?",
         )
         .run(connection.id);
       await db
@@ -628,6 +702,7 @@ export async function registerExtensions(
         )
         .run(stamp(), connection.id);
       await db.prepare('DELETE FROM website_reports WHERE connection_id = ?').run(connection.id);
+      await db.prepare('DELETE FROM platform_reports WHERE connection_id = ?').run(connection.id);
       await audit(
         db,
         request.auth.user,
@@ -640,16 +715,30 @@ export async function registerExtensions(
     response.json({ ok: true });
   });
 
+  const attachedIds = (row) => {
+    let ids = [];
+    try {
+      ids = JSON.parse(row.asset_ids ?? '[]');
+    } catch {
+      /* legacy single image */
+    }
+    return ids.length ? ids : row.asset_id ? [row.asset_id] : [];
+  };
+  async function sharedAssetIds(user) {
+    const posts = await db
+      .prepare(
+        "SELECT asset_id, asset_ids FROM posts WHERE owner_id = ? OR status IN ('in_review','approved','scheduled','published')",
+      )
+      .all(user.id);
+    return new Set(posts.flatMap(attachedIds));
+  }
   async function visibleAssets(user) {
-    const rows =
-      user.role === 'manager'
-        ? await db.prepare('SELECT * FROM media_assets ORDER BY created_at DESC LIMIT 200').all()
-        : await db
-            .prepare(
-              "SELECT media_assets.* FROM media_assets WHERE owner_id = ? OR EXISTS (SELECT 1 FROM posts WHERE posts.asset_id = media_assets.id AND (posts.owner_id = ? OR posts.status IN ('in_review','approved','scheduled','published'))) ORDER BY created_at DESC LIMIT 200",
-            )
-            .all(user.id, user.id);
-    return rows.map(publicAsset);
+    const rows = await db
+      .prepare('SELECT * FROM media_assets ORDER BY created_at DESC LIMIT 200')
+      .all();
+    if (user.role === 'manager') return rows.map(publicAsset);
+    const shared = await sharedAssetIds(user);
+    return rows.filter((row) => row.owner_id === user.id || shared.has(row.id)).map(publicAsset);
   }
   app.get('/api/media', ...authenticated, async (request, response) =>
     response.json({
@@ -675,34 +764,78 @@ export async function registerExtensions(
         request.get('content-type')?.split(';')[0].trim().toLowerCase(),
         name,
       );
-      if (
-        Number((await db.prepare('SELECT COUNT(*) AS count FROM media_assets').get()).count) >= 200
-      )
-        throw new HttpError(
-          409,
-          'This initial media library has reached its 200-image limit. A manager must review storage before adding more.',
-          'media_quota',
-        );
       const id = opaqueId('asset');
-      const stored = await storage.put(id, asset.bytes);
-      await db
-        .prepare(
-          'INSERT INTO media_assets(id, name, mime_type, size, sha256, width, height, storage_kind, storage_path, storage_url, owner_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      const uploadId = opaqueId('image_upload');
+      await transaction(db, async () => {
+        if (db.kind === 'postgres')
+          await db
+            .prepare('SELECT pg_advisory_xact_lock(hashtext(?))')
+            .get(`smis:${db.schema}:media-quota`);
+        const used = await db
+          .prepare('SELECT COUNT(*) AS count, COALESCE(SUM(size),0) AS bytes FROM media_assets')
+          .get();
+        const reserved = await db
+          .prepare(
+            "SELECT COUNT(*) AS count, COALESCE(SUM(CASE WHEN mime_type = 'video/mp4' THEN 41943040 ELSE expected_size END),0) AS bytes FROM media_uploads WHERE status <> 'completed'",
+          )
+          .get();
+        if (
+          Number(used.count) + Number(reserved.count) >= 200 ||
+          Number(used.bytes) + Number(reserved.bytes) + asset.size > 512 * 1024 * 1024
         )
-        .run(
-          id,
-          asset.name,
-          asset.mimeType,
-          asset.size,
-          asset.sha256,
-          asset.width,
-          asset.height,
-          stored.kind,
-          stored.path,
-          stored.url ?? null,
-          request.auth.user.id,
-          stamp(),
-        );
+          throw new HttpError(
+            409,
+            'The media library has reached its 200-asset or 512 MiB workspace allowance, including pending uploads. A manager must review storage before adding more.',
+            'media_quota',
+          );
+        await db
+          .prepare(
+            "INSERT INTO media_uploads(id,owner_id,name,mime_type,expected_size,storage_path,status,created_at,expires_at) VALUES (?,?,?,?,?,?,'pending',?,?)",
+          )
+          .run(
+            uploadId,
+            request.auth.user.id,
+            asset.name,
+            'image/jpeg',
+            asset.size,
+            `assets/${id}.jpg`,
+            stamp(),
+            new Date(now().getTime() + 2 * 3600000).toISOString(),
+          );
+      });
+      try {
+        const stored = await storage.put(id, asset.bytes);
+        await transaction(db, async () => {
+          await db
+            .prepare(
+              'INSERT INTO media_assets(id, name, mime_type, size, sha256, width, height, storage_kind, storage_path, storage_url, owner_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            )
+            .run(
+              id,
+              asset.name,
+              asset.mimeType,
+              asset.size,
+              asset.sha256,
+              asset.width,
+              asset.height,
+              stored.kind,
+              stored.path,
+              stored.url ?? null,
+              request.auth.user.id,
+              stamp(),
+            );
+          await db
+            .prepare("UPDATE media_uploads SET status = 'completed' WHERE id = ?")
+            .run(uploadId);
+        });
+      } catch (error) {
+        await db
+          .prepare(
+            "UPDATE media_uploads SET status = 'failed', error = 'The image upload could not be completed.' WHERE id = ? AND status <> 'completed'",
+          )
+          .run(uploadId);
+        throw error;
+      }
       response
         .status(201)
         .json(publicAsset(await db.prepare('SELECT * FROM media_assets WHERE id = ?').get(id)));
@@ -713,18 +846,19 @@ export async function registerExtensions(
       .prepare('SELECT * FROM media_assets WHERE id = ?')
       .get(request.params.id);
     if (!asset) throw new HttpError(404, 'Image not found.', 'not_found');
-    if (request.auth.user.role !== 'manager' && asset.owner_id !== request.auth.user.id) {
-      const shared = await db
-        .prepare(
-          "SELECT id FROM posts WHERE asset_id = ? AND (owner_id = ? OR status IN ('in_review','approved','scheduled','published')) LIMIT 1",
-        )
-        .get(asset.id, request.auth.user.id);
-      if (!shared)
-        throw new HttpError(
-          403,
-          'This draft image is private to its author and managers.',
-          'asset_private',
-        );
+    if (
+      request.auth.user.role !== 'manager' &&
+      asset.owner_id !== request.auth.user.id &&
+      !(await sharedAssetIds(request.auth.user)).has(asset.id)
+    )
+      throw new HttpError(
+        403,
+        'This draft asset is private to its author and managers.',
+        'asset_private',
+      );
+    if (asset.mime_type === 'video/mp4' && asset.storage_kind !== 'local') {
+      response.redirect(302, await storage.signedUrl(asset));
+      return;
     }
     const bytes = await storage.read(asset);
     response
@@ -757,7 +891,7 @@ export async function registerExtensions(
       if (!queued.length)
         throw new HttpError(
           422,
-          'Choose a connected Instagram destination and obtain approval before queuing.',
+          'Choose a connected publishing destination and obtain approval before queuing.',
           'destination_required',
         );
       await audit(
@@ -780,7 +914,15 @@ export async function registerExtensions(
   );
   app.post('/api/publications/:id/reconcile', ...manager, async (request, response) => {
     const input = parse(
-      z.object({ remoteId: z.string().regex(/^\d{1,40}$/) }).strict(),
+      z
+        .object({
+          remoteId: z
+            .string()
+            .min(1)
+            .max(256)
+            .regex(/^[A-Za-z0-9_:/.-]+$/),
+        })
+        .strict(),
       request.body,
     );
     response.json(await publishing.reconcile(request.params.id, input.remoteId, request.auth.user));
@@ -796,6 +938,8 @@ export async function registerExtensions(
   });
 
   return {
+    storage,
+    syncDueReports: reporting.syncDueReports,
     async bootstrap(request) {
       const user = request.auth.user;
       return {
@@ -818,22 +962,29 @@ export async function registerExtensions(
             .prepare('SELECT report_json FROM website_reports ORDER BY imported_at DESC')
             .all()
         ).map((row) => JSON.parse(row.report_json)),
+        platformAnalytics: (
+          await db
+            .prepare('SELECT report_json FROM platform_reports ORDER BY imported_at DESC')
+            .all()
+        ).map((row) => JSON.parse(row.report_json)),
         publishingEnabled: enabled && storage.canDeliver,
       };
     },
     async validatePost(post, user) {
       await publishing.assertUnlocked(post.id);
-      if (post.assetId) {
-        const asset = await db.prepare('SELECT * FROM media_assets WHERE id = ?').get(post.assetId);
-        const alreadyAttached = post.id
-          ? await db
-              .prepare('SELECT id FROM posts WHERE id = ? AND owner_id = ? AND asset_id = ?')
-              .get(post.id, user.id, post.assetId)
-          : null;
-        if (!asset || (user.role !== 'manager' && asset.owner_id !== user.id && !alreadyAttached))
+      const ids = post.assetIds?.length ? post.assetIds : post.assetId ? [post.assetId] : [];
+      const old = post.id
+        ? await db
+            .prepare('SELECT asset_id, asset_ids FROM posts WHERE id = ? AND owner_id = ?')
+            .get(post.id, user.id)
+        : null;
+      const existing = new Set(old ? attachedIds(old) : []);
+      for (const id of ids) {
+        const asset = await db.prepare('SELECT * FROM media_assets WHERE id = ?').get(id);
+        if (!asset || (user.role !== 'manager' && asset.owner_id !== user.id && !existing.has(id)))
           throw new HttpError(
             422,
-            'Choose an image you uploaded, or ask a manager to attach it.',
+            'Choose assets you uploaded, or ask a manager to attach them.',
             'invalid_asset',
           );
       }

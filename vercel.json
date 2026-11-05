@@ -27,9 +27,14 @@
       "headers": [
         { "key": "X-Content-Type-Options", "value": "nosniff" },
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
-        { "key": "X-Frame-Options", "value": "SAMEORIGIN" }
+        { "key": "X-Frame-Options", "value": "SAMEORIGIN" },
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow" }
       ]
     }
   ],
-  "crons": [{ "path": "/api/jobs/run", "schedule": "*/5 * * * *" }]
+  "crons": [
+    { "path": "/api/jobs/run", "schedule": "*/5 * * * *" },
+    { "path": "/api/intelligence/cron", "schedule": "*/15 * * * *" },
+    { "path": "/api/reports/cron", "schedule": "*/15 * * * *" }
+  ]
 }

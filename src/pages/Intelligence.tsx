@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import {
   ArrowRight,
@@ -11,6 +11,7 @@ import {
   Globe2,
   Lightbulb,
   Newspaper,
+  Radio,
   Pencil,
   Plus,
   Search,
@@ -24,8 +25,17 @@ import { useWorkspace } from '../lib/workspace';
 import type { Competitor, Opportunity, Platform, Source } from '../lib/types';
 import { Badge, Button, Modal, PlatformIcon } from '../components/UI';
 import '../styles/intelligence.css';
+import Monitoring, { WatchConfigModal, type WatchTarget } from '../components/Monitoring';
 
-type ResearchTab = 'discover' | 'competitors' | 'sources';
+type ResearchTab = 'monitoring' | 'discover' | 'competitors' | 'sources';
+const readResearchTab = (): ResearchTab => {
+  const value = new URLSearchParams(window.location.hash.split('?')[1]).get('tab');
+  return value === 'opportunities'
+    ? 'discover'
+    : value === 'discover' || value === 'competitors' || value === 'sources'
+      ? value
+      : 'monitoring';
+};
 type OpportunityFilter = 'all' | 'saved' | 'unverified' | 'drafted' | 'dismissed';
 type WatchEditor = { kind: 'competitor'; item?: Competitor } | { kind: 'source'; item?: Source };
 type DeleteTarget = { kind: 'competitor' | 'source'; id: string; name: string };
@@ -70,7 +80,12 @@ function displayDate(value?: string | null) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? 'Date unavailable'
-    : date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    : date.toLocaleDateString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        timeZone: 'Asia/Kolkata',
+      });
 }
 
 function hostname(value: string) {
@@ -108,7 +123,13 @@ function SourceLink({
 
 export default function Intelligence() {
   const { data, mutate, toast, navigate } = useWorkspace();
-  const [tab, setTab] = useState<ResearchTab>('discover');
+  const [tab, setTab] = useState<ResearchTab>(readResearchTab);
+  const [watchTarget, setWatchTarget] = useState<WatchTarget | null>(null);
+  useEffect(() => {
+    const changed = () => setTab(readResearchTab());
+    window.addEventListener('hashchange', changed);
+    return () => window.removeEventListener('hashchange', changed);
+  }, []);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<OpportunityFilter>('all');
   const [category, setCategory] = useState('all');
@@ -162,6 +183,7 @@ export default function Intelligence() {
 
   function changeTab(next: ResearchTab) {
     setTab(next);
+    window.location.hash = `intelligence?tab=${next}`;
     setQuery('');
   }
   function reportError(error: unknown) {
@@ -240,13 +262,18 @@ export default function Intelligence() {
           <div className="int-page-actions">
             <div className="int-mode">
               <span className="int-status-dot" />
-              Manual research
+              Source-linked briefs
             </div>
             <Button variant="primary" onClick={() => setBriefEditorOpen(true)}>
               <Plus size={17} aria-hidden="true" />
               Add brief
             </Button>
           </div>
+        ) : tab === 'monitoring' ? (
+          <Button variant="primary" onClick={() => setBriefEditorOpen(true)}>
+            <Plus size={17} />
+            Add research brief
+          </Button>
         ) : (
           <Button
             variant="primary"
@@ -262,7 +289,8 @@ export default function Intelligence() {
         <div className="tabs" aria-label="Intelligence sections">
           {(
             [
-              ['discover', 'Discover', Lightbulb],
+              ['monitoring', 'Monitoring', Radio],
+              ['discover', 'Research briefs', Lightbulb],
               ['competitors', 'Competitors', Users],
               ['sources', 'Sources', Globe2],
             ] as const
@@ -287,7 +315,18 @@ export default function Intelligence() {
         </p>
       </div>
 
-      {tab === 'discover' ? (
+      {tab === 'monitoring' ? (
+        <Monitoring
+          onOpenBrief={(id) => {
+            changeTab('discover');
+            if (id) setSelectedId(id);
+          }}
+          onAddReference={(kind) => {
+            changeTab(kind === 'source' ? 'sources' : 'competitors');
+            setEditor({ kind });
+          }}
+        />
+      ) : tab === 'discover' ? (
         <>
           <div className="int-summary-grid">
             <div className="int-summary-card">
@@ -590,10 +629,13 @@ export default function Intelligence() {
                 {tab === 'competitors'
                   ? 'Collect channels, profiles and websites your team wants to review.'
                   : 'Build a reliable collection of exam, board and counselling authorities.'}{' '}
-                These lists do not run background checks yet.
+                Configure a supported watch to check for updates automatically. Other profiles
+                remain available for manual review.
               </p>
             </div>
-            <Badge tone="amber">Manual review</Badge>
+            <Button size="sm" onClick={() => changeTab('monitoring')}>
+              Open monitoring <ArrowRight size={15} />
+            </Button>
           </div>
           <section
             className="panel int-watch-panel"
@@ -665,9 +707,32 @@ export default function Intelligence() {
                     <SourceLink url={item.url}>
                       Open {item.platform === 'website' ? 'website' : 'profile'}
                     </SourceLink>
+                    {isManager && ['youtube', 'website'].includes(item.platform) && (
+                      <Button
+                        size="sm"
+                        onClick={() => setWatchTarget({ kind: 'competitor', resourceId: item.id })}
+                      >
+                        <Radio size={15} />
+                        {data.intelligence.watches.some((watch) => watch.resourceId === item.id)
+                          ? 'Watch settings'
+                          : 'Configure monitoring'}
+                      </Button>
+                    )}
                     <div className="int-watch-bottom">
-                      <Badge tone={item.monitoringStatus === 'paused' ? 'gray' : 'amber'}>
-                        {item.monitoringStatus === 'paused' ? 'Paused' : 'Manual review'}
+                      <Badge
+                        tone={
+                          data.intelligence.watches.some(
+                            (watch) => watch.resourceId === item.id && watch.active,
+                          )
+                            ? 'green'
+                            : 'gray'
+                        }
+                      >
+                        {data.intelligence.watches.some(
+                          (watch) => watch.resourceId === item.id && watch.active,
+                        )
+                          ? 'Watch configured'
+                          : 'Manual review'}
                       </Badge>
                       <span>
                         {item.lastCheckedAt
@@ -690,9 +755,30 @@ export default function Intelligence() {
                       <SourceLink url={item.url}>{hostname(item.url)}</SourceLink>
                     </div>
                     <span className="int-source-category">{item.category}</span>
-                    <Badge tone={item.status === 'paused' ? 'gray' : 'amber'}>
-                      {item.status === 'paused' ? 'Paused' : 'Manual review'}
+                    <Badge
+                      tone={
+                        data.intelligence.watches.some(
+                          (watch) => watch.resourceId === item.id && watch.active,
+                        )
+                          ? 'green'
+                          : 'gray'
+                      }
+                    >
+                      {data.intelligence.watches.some(
+                        (watch) => watch.resourceId === item.id && watch.active,
+                      )
+                        ? 'Watch configured'
+                        : 'Manual review'}
                     </Badge>
+                    {isManager && (
+                      <Button
+                        size="sm"
+                        onClick={() => setWatchTarget({ kind: 'source', resourceId: item.id })}
+                      >
+                        <Radio size={15} />
+                        Watch
+                      </Button>
+                    )}
                     <div className="int-watch-actions">
                       <button
                         className="icon-button"
@@ -896,6 +982,24 @@ export default function Intelligence() {
               'Brief added. Review the original source before marking it as verified.',
               'success',
             );
+          }}
+        />
+      )}
+      {watchTarget && (
+        <WatchConfigModal
+          target={watchTarget}
+          watch={data.intelligence.watches.find(
+            (watch) =>
+              watch.resourceId === watchTarget.resourceId && watch.kind === watchTarget.kind,
+          )}
+          onClose={() => setWatchTarget(null)}
+          onAdded={() => {
+            setWatchTarget(null);
+            changeTab('monitoring');
+          }}
+          onAddReference={(kind) => {
+            setWatchTarget(null);
+            setEditor({ kind });
           }}
         />
       )}
@@ -1328,7 +1432,8 @@ function WatchEditorModal({
         <div className="int-form-note">
           <Globe2 size={16} aria-hidden="true" />
           <p>
-            This saves a reference for manual review. Background monitoring is not connected yet.
+            This saves the reference. A manager can configure supported automatic checks from its
+            Watch button or the Monitoring tab.
           </p>
         </div>
         {error && (

@@ -76,7 +76,7 @@ export function TrendChart({
       <div className="chart-placeholder">Connect an analytics source to see your first trend.</div>
     );
   const width = 680,
-    left = 38,
+    left = 60,
     right = 18,
     top = 20,
     bottom = 177;
@@ -123,7 +123,7 @@ export function TrendChart({
                 stroke="#edeaf4"
                 strokeDasharray="3 5"
               />
-              <text x="1" y={y + 3} fill="#aaa3b8" fontSize="9">
+              <text x="1" y={y + 3} fill="#6a6479" fontSize="14">
                 {formatNumber(Math.round(max * (1 - i / 3)))}
               </text>
             </g>
@@ -147,8 +147,8 @@ export function TrendChart({
             x={coordinates[i].x}
             y="205"
             textAnchor={i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle'}
-            fill="#aaa3b8"
-            fontSize="9"
+            fill="#6a6479"
+            fontSize="14"
           >
             {formatDate(points[i].date)}
           </text>
@@ -165,13 +165,13 @@ export function TrendChart({
             />
             <circle cx={point.x} cy={point.y} r="4" fill="#8c71dc" stroke="white" strokeWidth="2" />
             <g
-              transform={`translate(${Math.min(Math.max(point.x - 52, 41), 554)},${Math.max(point.y - 45, 0)})`}
+              transform={`translate(${Math.min(Math.max(point.x - 65, 60), 532)},${Math.max(point.y - 60, 0)})`}
             >
-              <rect width="104" height="34" rx="8" fill="#242238" />
-              <text x="52" y="14" textAnchor="middle" fill="#c2b8d8" fontSize="8">
+              <rect width="130" height="48" rx="8" fill="#242238" />
+              <text x="65" y="18" textAnchor="middle" fill="#c2b8d8" fontSize="14">
                 {formatDate(picked.date)}
               </text>
-              <text x="52" y="26" textAnchor="middle" fill="white" fontSize="10">
+              <text x="65" y="37" textAnchor="middle" fill="white" fontSize="14">
                 {formatNumber(picked[metric])} {metric}
               </text>
             </g>

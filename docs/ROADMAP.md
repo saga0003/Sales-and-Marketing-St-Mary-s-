@@ -1,117 +1,287 @@
-# Roadmap to a connected school marketing workspace
+# Roadmap after version 0.3
 
-## Starting point
+Version 0.3 implements the next working layer of the school’s marketing
+workspace: review notifications, clearer typography, private video/carousel
+assets, additional official provider adapters, recurring reporting, bounded
+research monitoring, owned-site SEO checks and richer shared documents.
 
-Version 0.2 adds shared PostgreSQL persistence, personal account setup/recovery, manager-controlled access, private image uploads, revision comments/history, Google Analytics 4 imports and an Instagram single-image publishing adapter. Vercel runs the UI/API and a bounded five-minute publishing worker; Supabase holds the private application schema and image bucket. Production starts empty. Google and Meta applications and school accounts must still be authorized before real reports or posts are possible. Advertising, automatic news/competitor monitoring, Search Console and AI services remain future work.
+The next priority is a controlled production pilot with the school’s real
+accounts and sources. Shipping adapter code does not grant Google, Meta or
+LinkedIn access, prove that a source never changes its markup, or establish
+admissions attribution. The application makes those dependencies visible.
 
-The first two implementation slices are the shared team foundation and the initial GA4/Instagram connections. The numbered workstreams below describe the broader roadmap; they are not a claim that every original requirement is complete.
+## What is implemented now
 
-The next stages should make one complete workflow useful at a time. Keep the portal as the place where people work and approve decisions; connect specialist services behind it rather than merging several repositories into one codebase.
+| Workstream                 | Implemented in v0.3                                                                                                                                      | Boundary                                                                                              |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Readable interface         | Browser-relative text scale, generally 16px body/inputs and 14px compact metadata; retained light/navy/violet design; wrapping and responsive navigation | Targeted usability improvements, not a full accessibility certification                               |
+| Team review                | Personal accounts, revision comments/history, contributor/manager roles, exact-revision approval, reject/request-changes and persistent audit trail      | No public self-registration or automatic invitation email                                             |
+| Notifications              | Per-user inbox, unread count, event routing, read controls, optional sound and desktop alerts                                                            | Open-workspace polling; no closed-browser push, SMS or email delivery                                 |
+| Images and videos          | Private immutable image uploads, ordered carousel assets, direct MP4 uploads with validation and hashes                                                  | 3 MiB image input, 40 MiB video/ten-minute limit; no video editor/transcoder                          |
+| Publication                | Durable approval-bound jobs for supported Instagram, Facebook Page, YouTube, Business Profile and LinkedIn formats                                       | Requires authorized accounts, provider access and publication switch; unsupported formats are blocked |
+| Provider reporting         | GA4, Search Console, owned social/Business Profile data, Google Ads and Meta Ads reports; CSV export                                                     | Read-only ads; metrics retain provider meanings rather than a fabricated cross-platform total         |
+| Recurring reporting        | Per-account opt-in, 6–168 hour interval, default 24 hours; one due account per cron run                                                                  | 28-date window ending two UTC dates ago; provider processing lag still applies                        |
+| Official-source monitoring | Durable RSS/Atom/HTML watches, official-source catalog, visible check/error states, deduplication and metadata history                                   | Bounded public pages/feeds; not every examination board or every PDF is covered                       |
+| Competitor monitoring      | Public YouTube channel upload feeds and permitted public website/feed watches                                                                            | No arbitrary Instagram/Facebook/LinkedIn login scraping or private competitor analytics               |
+| Research workflow          | Notice → unverified brief → draft → manager review; corrections clear linked brief verification                                                          | Fetched metadata is not proof of the claim; existing posts are not silently rewritten                 |
+| SEO                        | Ownership challenge, same-origin single-page audits and authorized Search Console reports                                                                | No whole-site rendered crawl, Core Web Vitals engine or guaranteed indexing                           |
+| AEO/GEO                    | Reproducible prompt and dated observation register, source citations, evidence and saved prompt context                                                  | Manually entered observations; no automated AI answer collection or universal visibility score        |
+| Shared documents           | Paragraphs, headings, bullets, checklists, quotes, saved versions and conflict protection                                                                | No CRDT/live co-editing, relational databases, nested workspaces or full Notion parity                |
 
-## Prioritized delivery phases
+See [API.md](API.md) for actual endpoints,
+[CONNECTING-ACCOUNTS.md](CONNECTING-ACCOUNTS.md) for setup,
+[INTELLIGENCE-GUIDE.md](INTELLIGENCE-GUIDE.md) for source/competitor operation and
+[TYPE-AND-UX.md](TYPE-AND-UX.md) for typography decisions.
 
-### 1. Run a small internal pilot
+## Production gate 1: team acceptance
 
-Use a separate production database behind HTTPS. Create real team accounts, confirm role boundaries, verify backups and test a full draft → review → requested changes → revised approval → local plan workflow with the people who will use it.
+Use manager and contributor accounts in separate browser sessions. A test email
+need not already have a Supabase Auth account: the workspace uses its own
+email/password sessions. A manager creates the account and supplies its
+single-use setup link. That link expires after 24 hours; application access
+continues through normal sign-in after activation.
 
-Account setup/recovery, password changes, manager-controlled account deactivation, shared revision history and comments are implemented. Keep demonstration records out of the production database. Review the school’s actual institution names, publishing languages, content formats and responsibilities. A restore drill and an ordinary week of team use remain pilot exit checks.
+Run one ordinary content week in the application:
 
-**Exit condition:** the team can use the workspace for a normal content week, a contributor cannot approve their own work, changed content requires fresh approval, and an isolated restore recovers the workspace.
+1. Upload a test image, save a draft with **no publishing destinations**, leave
+   Content and reopen it. Confirm caption and media persist.
+2. Submit as the contributor. Confirm the manager’s inbox receives the event.
+3. Request changes with a clear note. Confirm the contributor receives the
+   decision and can identify the feedback and revision.
+4. Revise, resubmit and approve. Verify that the previous approval cannot cover
+   newly edited content.
+5. Opt into sound and desktop alerts separately. Confirm browser permission,
+   mute controls and read/unread behavior in the intended browsers.
+6. Open one document in two sessions. Save in one, then try saving the old
+   version in the other. A conflict must preserve the teammate’s work.
+7. Review the interface at narrow widths and with 200% browser text/zoom.
+   Confirm that navigation, dialogs and publishing destinations remain usable.
 
-### 2. Add official-source research and a limited competitor feed
+**Exit condition:** staff can complete the workflow without guidance, the
+manager sees decisions that need attention and no interface-only approval sends
+content externally.
 
-Start with a named source list relevant to the school and its students. NTA and exam-specific notices, NMC, MCC, Karnataka KEA/KSEAB, CBSE and CISCE are sensible candidates, subject to the school’s actual boards and programmes. Start with a manageable set of pages rather than claiming coverage of every Indian examination.
+This gate should also establish the exact institution names, team owners,
+languages and who is responsible for reviewing time-sensitive academic claims.
 
-Implement a source registry with jurisdiction, exam/course, academic year, collection method and owner. Fetch only through permitted access paths. Store an original HTML/PDF snapshot, content hash, source URL, published/fetched dates and the evidence used by a brief. Extract PDF text and tables, route unreadable or ambiguous files for human review, and deduplicate repeat notices.
+## Production gate 2: authorize and reconcile owned accounts
 
-Treat revisions, withdrawals and corrigenda as first-class events. A correction should flag affected briefs and unpublished drafts for review. Keep medical-college applications/proposals, permissions, sanctioned intake and counselling-round availability separate. A proposed college or an invitation to apply for increased intake is not an approved seat increase.
+The application already implements OAuth authorization, account discovery,
+exact account selection, connection tests and encrypted credential storage.
+The remaining setup is the school’s provider-side developer access and consent.
 
-For competitors, begin with public websites and a small set of YouTube channels using supported access. Add Instagram, Facebook and LinkedIn collection only after verifying what each current API and account type allows. Public profile visibility does not provide private reach, leads, audience demographics or account analytics.
+Configure one provider family at a time using the connection guide. Register
+the application’s exact callbacks, enable relevant APIs and obtain the access
+levels required for the intended accounts. Then the manager uses **Connect**,
+grants permissions, selects the specific account/property/location and tests it.
+The recurring staff workflow can be a few clicks after this operator setup;
+the application cannot approve its own provider permissions.
 
-AI assistance can later classify relevance and propose a parent-friendly angle, but the draft must retain evidence and a human review state. Source verification must not silently imply approval of the resulting marketing content.
+Prioritize:
 
-**Exit condition:** a real official update produces one evidence-linked brief; a corrected notice flags the previous interpretation; collection failures are visible; nothing is posted automatically.
+1. **GA4 and Search Console.** Confirm the school’s website already has GA4
+   installed and the correct Search Console property verified. Connecting an
+   account here does not install a tracking tag or define enquiry events.
+2. **Instagram and Facebook.** Verify the exact professional Instagram account,
+   associated Page and manager access. Reauthorize older connections when new
+   publishing/insights scopes are needed.
+3. **Business Profile and YouTube.** Select the correct school location/channel,
+   check project access and quota, then review reporting and video visibility.
+4. **Google Ads and Meta Ads.** Start with reporting, the intended customer/ad
+   account, account currency and agreed conversion definitions.
+5. **LinkedIn.** Separate personal posting from organization posting/reporting.
+   Organization capabilities depend on the provider’s approved product access.
 
-### 3. Connect one publishing channel end to end
+For each reporting connection, import a short explicit date range and compare
+with the provider’s own interface using identical account, dates, timezone and
+attribution settings. Separate account-wide totals from top-page/query/campaign
+tables. An unavailable metric must stay unavailable, not become zero.
 
-Choose the school’s first real channel based on account ownership, supported formats and API access. A publishing service or adapter may reduce integration work, but the portal remains responsible for approval.
+Only after this comparison, enable recurring reports. The automatic schedule is
+off by default, imports 28 inclusive dates with a two-day UTC-date lag and uses
+one bounded account per worker invocation. A transient failure is retried at the
+configured interval. Permission/expired-auth errors need a connection test or
+reauthorization. Old successful data remains labelled with its import time.
 
-Add account authorization, credential storage, connection health, media handling and format validation. Store approved media as immutable assets with checksums; approval of a URL alone must not authorize changed remote image or video bytes. Create a durable publication job only for an approved revision. Before sending, recheck the exact revision, approval, scheduled time and account. Store the remote post ID and result. Use idempotency and reconciliation so retries do not create duplicate posts. Expose failed jobs and manual retry/cancel actions.
+**Exit condition:** each enabled report reconciles to the provider and its owner
+understands the definitions. Enquiries, platform-reported conversions and
+confirmed admissions remain distinct.
 
-Do not mark a post as published merely because it was queued or an HTTP request was attempted. Revoke queued work when approved content changes. Decide how deletions/cancellations are handled when a provider has already accepted the post.
+## Production gate 3: controlled real publication
 
-**Exit condition:** a manager-approved test post appears once on the chosen real channel, its remote URL is recorded, unauthorized or changed content is blocked, and failures remain reviewable. Add further platforms only after this works reliably.
+The implemented format matrix is deliberately explicit:
 
-### 4. Bring reporting into one view
+| Destination                  | Enabled adapter format                                                                          |
+| ---------------------------- | ----------------------------------------------------------------------------------------------- |
+| Instagram                    | One image; 2–10 image carousel; one validated 9:16 MP4 Reel                                     |
+| Facebook Page                | Text or one image in Post format                                                                |
+| YouTube                      | One validated MP4 in Video format, with approved visibility/audience/synthetic-content settings |
+| Google Business Profile      | Text or one image in Post format, for eligible locations                                        |
+| LinkedIn organization/member | Text or one image in Post format, subject to granted permissions                                |
 
-Connect owned-account reporting before adding automated advertising changes. Prioritize the sources that answer concrete questions: Search Console and website analytics, social account results, Meta/Google campaign reporting, and the admissions CRM where permitted.
+Use a designated test account or a clearly approved real post. Confirm the
+actual destination and media preview before the manager approves. Start with
+one destination, then verify its remote post ID/URL and the visible result.
+A YouTube pilot should use the visibility selected by its responsible manager.
 
-Store provider, account, campaign, post, date, timezone, currency and attribution definition with each metric. Distinguish platform-reported conversions, deduplicated enquiries and confirmed admissions. Do not sum platform reach into a claim about unique people. Preserve reporting lag and refresh time in the interface.
+Exercise an eligible failure/retry and a cancellation without creating duplicate
+posts. If the provider accepted a send but its response was lost, the job must
+remain ambiguous until inspected/reconciled. A worker attempt alone must never
+appear as confirmed publication. LinkedIn member read-back restrictions need
+manual inspection where the provider cannot verify the result.
 
-An Odoo/SalesOS adapter is a future integration, not a current connection. Start by specifying the minimum approved fields and identity matching needed to link campaign enquiries to admissions. Do not copy unnecessary student data into the marketing application.
+**Exit condition:** each enabled destination publishes an approved revision
+once, reports the outcome accurately and makes an actionable failure visible.
+Enable further formats/platforms only after proving this path with real access.
 
-**Exit condition:** the dashboard reconciles a small date range to the original provider reports and clearly labels what an enquiry or conversion means. Sample data is replaced only for connected sources.
+## Production gate 4: official research and competitor baseline
 
-### 5. Add practical SEO, AEO and GEO workflows
+Begin with a small relevant set: NTA, the school’s board, NMC and MCC, then the
+state counselling/examination authorities applicable to the school. The catalog
+provides starting URLs; a manager must confirm that each selected page covers
+the required exam, course, academic year and geography.
 
-Create recurring website checks, Search Console reviews and content tasks. Focus on useful admissions/programme pages, crawl/index issues, clear factual answers, source dates and accurate organization/course information. Treat local search visibility as a distinct workstream from generative-engine visibility.
+The first successful source scan is a **baseline**, not a stream of newly issued
+announcements. Review that baseline, choose keyword filters and set a reasonable
+interval. Watches record actual success/error times, detected metadata and
+changes. PDF links can be retained as evidence, but this version does not
+extract or compare their body text.
 
-For AEO/GEO experiments, use a defined set of parent/student questions and record the model/provider, prompt, locale, date, cited sources and observed answer. Report a sampled visibility study, not a universal AI ranking or a guaranteed position. API use, search data, hosting and model inference can incur costs even when orchestration code is free.
+For a real notice, open the official source and verify applicability/date before
+promoting its brief to content. A medical-college proposal, permission,
+sanctioned intake and counselling-round vacancy are different claims. No
+automatically inferred seat number should reach a marketing caption.
 
-**Exit condition:** a recurring review produces evidence-backed tasks, and improvements can be compared against a documented baseline rather than an opaque generated score.
+Add a competitor’s YouTube **channel ID** for public upload monitoring, or an
+eligible public website/feed. An Instagram/Facebook/LinkedIn profile bookmark
+does not acquire analytics or create a scraping session. Record useful manual
+observations with evidence when official access is unavailable.
 
-### 6. Add controlled advertising operations and broader collaboration
+**Exit condition:** a genuine official update produces one evidence-linked
+brief; a correction invalidates the linked verification; collection failures
+remain visible; no source item publishes without normal review.
 
-After reliable read-only reporting, consider campaign/ad creation and changes through approved account APIs. Use explicit manager approval for the exact creative, audience, destination and spending change. Set budget limits, audit changes and provide a pause/rollback procedure where the provider supports it. Provider app review, account permissions and billing are external dependencies.
+## Production gate 5: operation and recovery
 
-Expand the knowledge workspace when real usage justifies it: version history, attachments, linked structured records and collaborative editing. Decide whether these belong in this application or in an integrated team wiki. Do not promise a complete Notion replacement from the current plain-text documents feature.
+Keep the production database and private object storage durable. SQLite and
+local media are development options, not Vercel persistence. Supabase-hosted
+PostgreSQL/private storage are separate from the application’s custom login.
 
-**Exit condition:** an approved bounded campaign change is traceable to the actual provider state, and collaboration additions solve an observed team need.
+Verify migrations, database backups and a restore into an isolated environment.
+Include media inventory and access credentials in the recovery plan without
+placing secrets in the repository. Check that incomplete uploads are cleaned
+up, completed immutable assets remain readable and workspace quotas are
+understandable to staff.
 
-## Adapter architecture
+Verify all three protected workers in the deployed environment:
 
-Keep domain records and workflow decisions independent of provider-specific SDKs. Suggested boundaries are:
+- Publication: at most one due job per invocation; configured every five minutes.
+- Intelligence: at most two due watches and bounded media cleanup; every fifteen
+  minutes.
+- Reports: at most one due account; every fifteen minutes.
 
-| Adapter            | Input                                     | Output and obligations                                         |
-| ------------------ | ----------------------------------------- | -------------------------------------------------------------- |
-| Source collector   | Registered source and collection cursor   | Snapshot, provenance, observed changes and collection errors   |
-| Document extractor | Stored HTML/PDF/image evidence            | Text/tables with page references and extraction quality flags  |
-| Brief assistant    | Evidence and editorial guidance           | Proposed summary/angle; cannot verify facts or approve content |
-| Publisher          | Approved revision, destination and media  | Job state, provider post ID/URL and verified result            |
-| Analytics reader   | Authorized account and reporting window   | Normalized metrics with source/attribution metadata            |
-| Ads operator       | Specifically approved campaign change     | Provider result, spend controls and audit event                |
-| CRM reader         | Approved minimal enquiry/admission fields | Attribution linkage without broad student-data copying         |
+These are requested Vercel schedules. Check the actual hosting plan’s support,
+logs, duration and overdue work; more accounts/watches may require a larger
+worker budget or queue service. Monitor the workers themselves so an empty
+result is distinguishable from a worker that never ran.
 
-Persist job state, retries, idempotency keys and the last successful collection. Add monitoring of the workers themselves so a missing update is distinguishable from a failed job. OAuth scopes, token rotation and provider limits belong in each adapter's documentation.
+**Exit condition:** a restore works, provider/source failures can be diagnosed,
+and the team knows who owns access, billing, worker health and corrections.
 
-SQLite remains available for local development. The hosted application now requires PostgreSQL, uses transaction-scoped schema settings for pooled connections and persists publication jobs in that database. Images are stored separately in private object storage. The deployment must not use ephemeral Vercel files as its production database or media store. See the deployment instructions and provider adapter documentation before enabling additional accounts.
+## Next implementation priorities after the pilot
 
-## Candidate repositories to evaluate
+### 1. Evidence extraction and structured academic facts
 
-These are due-diligence candidates, not installed dependencies, endorsements of a particular free plan, or guarantees that every requested feature is included. Check the exact release, licence files, self-hosted edition, API access and maintenance at the point of integration.
+Add original-document snapshots, PDF text/table extraction and OCR only after
+testing actual NMC/MCC/board documents. Preserve document hash, page, row,
+academic year, quota/category and evidence for every extracted value. Handle
+withdrawals and corrigenda explicitly. Flag affected briefs and unpublished
+drafts for a person to review; do not silently rewrite an approved caption.
 
-| Candidate                                                                                     | Possible role                                        | Evaluation that must happen first                                                                                     |
-| --------------------------------------------------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| [Postiz](https://github.com/gitroomhq/postiz-app)                                             | Social publishing service behind the approval portal | Current self-host/API capabilities, platform coverage, approval boundary, media handling and licence obligations      |
-| [Mixpost](https://github.com/inovector/mixpost)                                               | Alternative publishing service                       | Features in the exact free/commercial edition, API availability and account/provider requirements                     |
-| [n8n](https://github.com/n8n-io/n8n)                                                          | Orchestration for collection and reporting           | Sustainable-use terms, required paid governance features and safe separation of staff UI from workflow administration |
-| [Activepieces](https://github.com/activepieces/activepieces)                                  | Alternative orchestration                            | Current core/enterprise boundary, required connectors, versioning and operational support                             |
-| [changedetection.io](https://github.com/dgtlmoon/changedetection.io)                          | Detection of public notice-page changes              | Access rules, browser/PDF support, selector stability, volume and failure handling                                    |
-| [FreshRSS](https://github.com/FreshRSS/FreshRSS) / [RSSHub](https://github.com/DIYgod/RSSHub) | Feed collection where sources permit it              | Available feeds/routes, reliability, authentication requirements and source terms                                     |
-| [Docling](https://github.com/docling-project/docling)                                         | PDF/document extraction                              | Accuracy on actual notice tables, OCR/model licences, runtime needs and page-level evidence                           |
-| [BookStack](https://www.bookstackapp.com/)                                                    | Separate team wiki with an integration layer         | Current supported APIs, authentication, permissions and whether another UI improves the team's workflow               |
+This is a substantial new component. Current link monitoring cannot substitute
+for validated seat-table extraction. A parser that cannot read a table should
+produce an actionable review state rather than a guessed total.
 
-A public repository is not a promise of no-cost hosting, free platform access or unrestricted licensing. Do not adopt legacy free-server instructions without checking the current project. In particular, a product's open client or core does not prove that its maintained multiuser server, API, SSO or review features are free.
+### 2. Notification delivery beyond an open browser
 
-## Practical acceptance tests for future automation
+Add transactional email and/or opt-in web push when the team confirms channels,
+recipient rules and frequency. Include digests and escalation only for agreed
+events. Setup-link delivery needs a verified sender and email configuration.
+Keep the inbox authoritative so failed external delivery does not lose a review
+decision.
 
-- A source changes twice: the system records both versions and identifies the newer correction.
-- A parser cannot read a seat table: the item goes to review with the original file, rather than inventing a number.
-- A contributor attempts to approve or change another author's locked draft: the server rejects it.
-- A manager approves revision 3 and someone edits to revision 4: queued publication for revision 3 cannot proceed unnoticed.
-- A provider accepts a post but the response is lost: retry reconciles the existing remote post instead of publishing a duplicate.
-- Credentials expire or a collector stops: the application shows an actionable failure and the last successful result.
-- Two advertising platforms claim the same enquiry: the system preserves attribution sources and does not label their sum as confirmed admissions.
-- A new source or channel is added: it stays unconnected/manual until its actual collector or publisher succeeds.
+### 3. Reporting history and admissions attribution
 
-Implementation estimates should be made after the first source set, channel, account permissions and hosting approach are selected. Platform approvals and access restrictions can dominate calendar time; a repository alone cannot remove them.
+Current provider imports retain the latest successful report for each
+connection. Add a historical reporting warehouse only when trend comparisons
+need it, with stable metric definitions and late-arriving corrections. A CRM
+adapter should begin with minimal approved enquiry/admission fields and a
+documented deduplication/identity rule.
+
+No CRM/Odoo/SalesOS connection is currently implemented. Paid-platform
+conversions must not be labelled confirmed admissions or summed across
+platforms without deduplication.
+
+### 4. Deeper SEO and scheduled AEO/GEO studies
+
+Extend verified-site checks to bounded crawling, rendered-page inspection,
+Core Web Vitals and recurring tasks if the pilot identifies those needs.
+Preserve URL-level findings and fix history.
+
+Automated AI visibility studies need an agreed prompt set, actual provider APIs,
+paid usage budget where applicable, language/location controls and reproducible
+evidence. Record observations and sampling limits; do not turn a small prompt
+sample into a universal ranking or guaranteed result. ChatGPT Pro access is not
+an application API credential.
+
+### 5. Additional media, publishing and document features
+
+Prioritize formats the team actually uses: larger uploads, transcoding,
+captions, video editing, additional provider formats and approved cross-post
+variants. Any new adapter must preserve exact-revision approval and ambiguous
+delivery handling.
+
+For documents, add richer organization, links between records and live
+co-editing only after observing workflow friction. Version-conflict protection
+and saved history are already present; a full Notion-compatible data model is
+not.
+
+### 6. Advertising changes with their own approval controls
+
+Google Ads and Meta Ads are read-only in this release. Campaign creation,
+creative updates, audience changes and budget/bid automation require a separate
+design: explicit accounts, spend bounds, dry-run previews, manager approval,
+idempotency, audit history and rollback/reconciliation behavior.
+
+Do not reinterpret a content-post approval or a reporting OAuth permission as
+permission to spend money.
+
+## Open-source reuse
+
+This release extends the existing application and focused adapters; it does not
+fork a second social scheduler or document suite. See
+[OPEN-SOURCE-DECISIONS.md](OPEN-SOURCE-DECISIONS.md) for the repositories already
+considered and the reasons.
+
+Revisit a maintained external component when there is a demonstrated gap:
+operator-managed automation, PDF/OCR extraction or real-time documents are
+plausible candidates. Evaluate the actual version, licence, API, account model,
+deployment cost and data export path first. Public source code does not make
+hosting, provider access, API usage or enterprise features free.
+
+An added service should receive narrowly scoped access and call the existing
+approval-safe workflow. It must not create a second, independent publication
+path that can send unapproved school content.
+
+## Release claims and effort estimates
+
+Version 0.3 provides working application code and local automated coverage of
+the workflows above. Live provider acceptance depends on the school’s actual
+accounts and the production checks described here. Release notes should list
+what was actually connected, imported and published; mock-provider tests are
+not evidence of live account authorization.
+
+Estimate the next increment after those pilot results, separating coding effort
+from provider review/access waiting time and ongoing operation. The current
+product is a tailored school workspace with explicit supported functions, not
+an exact copy of Metricool or Notion.

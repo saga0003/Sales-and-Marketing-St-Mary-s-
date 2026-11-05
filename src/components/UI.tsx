@@ -188,7 +188,7 @@ const statusLabels: Record<PostStatus, string> = {
   changes_requested: 'Changes requested',
   approved: 'Approved',
   scheduled: 'Planned',
-  published: 'Published',
+  published: 'Delivered',
   rejected: 'Rejected',
 };
 export function StatusBadge({ status }: { status: PostStatus }) {

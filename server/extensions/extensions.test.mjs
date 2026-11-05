@@ -32,7 +32,7 @@ test('disabled automatic migration checks the extension marker without any DDL o
   const db = {
     prepare(sql) {
       assert.match(sql, /SELECT value FROM workspace_metadata/);
-      return { get: async () => ({ value: '1' }) };
+      return { get: async () => ({ value: '2' }) };
     },
     exec() {
       assert.fail('Startup must not execute DDL with migrations disabled.');
@@ -326,6 +326,7 @@ async function fixture(t, overrides = {}) {
       `https://private-storage.example/${asset.storage_path}?signature=short-lived`,
   };
   const errors = [];
+  let extensionHooks;
   const app = await createApp({
     demoMode: true,
     databaseUrl: '',
@@ -335,6 +336,10 @@ async function fixture(t, overrides = {}) {
     allowedOrigins: [],
     now: () => new Date(time),
     onError: (error) => errors.push(error),
+    registerExtensions: async (application, context) => {
+      extensionHooks = await registerExtensions(application, context);
+      return extensionHooks;
+    },
     extensionOptions: {
       encryptionKey: Buffer.alloc(32, 7),
       appOrigin: 'http://localhost:5173',
@@ -464,6 +469,7 @@ async function fixture(t, overrides = {}) {
   }
   return {
     app,
+    extensions: extensionHooks,
     db: app.locals.database,
     request,
     connect,
@@ -483,6 +489,140 @@ async function fixture(t, overrides = {}) {
     },
   };
 }
+
+test('shared developer credentials configure sibling services and partial updates do not expose secrets', async (t) => {
+  const f = await fixture(t);
+  assert.equal(
+    (
+      await f.request('/api/connections/providers/google', {
+        method: 'PUT',
+        body: { clientId: 'APP_ID', clientSecret: 'SUPER_SECRET_APP' },
+      })
+    ).status,
+    200,
+  );
+  const partial = await f.request('/api/connections/providers/google_ads', {
+    method: 'PUT',
+    body: { loginCustomerId: '1234567890' },
+  });
+  assert.equal(partial.status, 200, JSON.stringify(partial.body));
+  const bootstrap = (await f.request('/api/bootstrap')).body;
+  assert.ok(
+    bootstrap.providerSetup
+      .filter((item) => item.credentialGroup === 'google')
+      .every((item) => item.configured),
+  );
+  assert.ok(!JSON.stringify(bootstrap).includes('SUPER_SECRET_APP'));
+  assert.ok(!JSON.stringify(bootstrap).includes('1234567890'));
+  assert.equal(
+    (await f.db.prepare('SELECT COUNT(*) AS count FROM provider_settings').get()).count,
+    1,
+  );
+});
+
+test('a text-only Facebook post passes the same manager approval and durable queue as image posts', async (t) => {
+  const f = await fixture(t);
+  f.fake.discover = async () => [
+    {
+      id: '321',
+      name: 'School Facebook',
+      kind: 'facebook',
+      pageId: '321',
+      pageAccessToken: 'SECRET_PAGE',
+    },
+  ];
+  const sent = [];
+  f.fake.publishDirect = async (service, accountId, _current, _credentials, post, media) => {
+    sent.push({ service, accountId, caption: post.caption, mediaCount: media.length });
+    return { id: '321_999', url: 'https://www.facebook.com/321_999' };
+  };
+  const connection = await f.connect('facebook');
+  const post = await f.approved(connection, { id: null }, { platforms: ['facebook'] });
+  assert.equal(sent.length, 0);
+  const job = (await f.request('/api/jobs/run', { method: 'POST' })).body.jobs[0];
+  assert.equal(job.status, 'published');
+  assert.equal(job.platform, 'facebook');
+  assert.equal(job.remoteUrl, 'https://www.facebook.com/321_999');
+  assert.deepEqual(sent, [
+    { service: 'facebook', accountId: '321', caption: 'Approved caption', mediaCount: 0 },
+  ]);
+  assert.equal(
+    (await f.db.prepare('SELECT asset_id FROM publication_jobs WHERE post_id = ?').get(post.id))
+      .asset_id,
+    null,
+  );
+});
+
+test('carousel approval binds every asset and its order and worker rejects a changed order', async (t) => {
+  const f = await fixture(t);
+  const connection = await f.connect('instagram');
+  const first = await f.asset();
+  const second = await f.asset();
+  const post = await f.approved(connection, first, {
+    format: 'Carousel',
+    assetIds: [first.id, second.id],
+  });
+  const job = await f.db.prepare('SELECT * FROM publication_jobs WHERE post_id = ?').get(post.id);
+  assert.deepEqual(
+    JSON.parse(job.approved_payload).assets.map((asset) => asset.id),
+    [first.id, second.id],
+  );
+  await f.db
+    .prepare('UPDATE posts SET asset_ids = ?, asset_id = ? WHERE id = ?')
+    .run(JSON.stringify([second.id, first.id]), second.id, post.id);
+  await f.request('/api/jobs/run', { method: 'POST' });
+  assert.equal(f.calls.published, 0);
+  assert.equal(
+    (await f.db.prepare('SELECT status FROM publication_jobs WHERE id = ?').get(job.id)).status,
+    'cancelled',
+  );
+});
+
+test('generic platform imports persist their attribution and CSV protects spreadsheet cells', async (t) => {
+  const f = await fixture(t);
+  f.fake.discover = async () => [
+    {
+      id: 'act_123',
+      name: '=unsafe-account-name',
+      kind: 'meta_ads',
+      credentials: { currency: 'INR' },
+    },
+  ];
+  f.fake.platformReport = async () => ({
+    currency: 'INR',
+    summary: [{ key: 'spend', label: 'Spend', value: 12.5, unit: 'currency' }],
+    tables: [
+      {
+        key: 'campaigns',
+        label: 'Campaigns',
+        columns: [{ key: 'name', label: 'Name', type: 'text' }],
+        rows: [{ name: '=HYPERLINK("https://example.invalid")' }],
+      },
+    ],
+    notes: ['Account attribution, not verified admissions.'],
+  });
+  const connection = await f.connect('meta_ads');
+  const synced = await f.request(`/api/connections/${connection.id}/sync`, {
+    method: 'POST',
+    body: { startDate: '2026-10-01', endDate: '2026-10-30' },
+  });
+  assert.equal(synced.status, 200, JSON.stringify(synced.body));
+  assert.equal(synced.body.currency, 'INR');
+  const csv = await f.request(`/api/connections/${connection.id}/report.csv`);
+  assert.equal(csv.status, 200);
+  assert.match(csv.headers.get('content-type'), /text\/csv/);
+  assert.ok(csv.body.includes("'=unsafe-account-name"));
+  assert.ok(csv.body.includes("'=HYPERLINK"));
+  const saved = (await f.request('/api/bootstrap')).body.platformAnalytics[0];
+  assert.equal(saved.provider, 'meta_ads');
+  assert.equal(saved.accountName, '=unsafe-account-name');
+  assert.equal(saved.startDate, '2026-10-01');
+  assert.equal(
+    (await f.request(`/api/connections/${connection.id}`, { method: 'DELETE' })).status,
+    200,
+  );
+  assert.equal((await f.request('/api/bootstrap')).body.platformAnalytics.length, 0);
+});
 
 test('OAuth state is session-bound, single use, encrypted, and secrets never enter public records', async (t) => {
   const f = await fixture(t);
@@ -926,4 +1066,243 @@ test('contributors can preview shared images and retain a manager-attached image
     ).status,
     422,
   );
+});
+
+test('automatic report imports are opt-in, manager-controlled and restricted to reporting accounts', async (t) => {
+  const f = await fixture(t);
+  const connection = await f.connect('google');
+  assert.equal(connection.autoSync, false);
+  assert.equal(connection.syncIntervalHours, 24);
+  assert.equal((await f.extensions.syncDueReports()).processed, 0);
+  assert.equal(
+    (
+      await f.request(`/api/connections/${connection.id}/sync-settings`, {
+        method: 'POST',
+        body: { autoSync: true, syncIntervalHours: 1 },
+      })
+    ).status,
+    422,
+  );
+  const enabled = await f.request(`/api/connections/${connection.id}/sync-settings`, {
+    method: 'POST',
+    body: { autoSync: true },
+  });
+  assert.equal(enabled.status, 200, JSON.stringify(enabled.body));
+  assert.equal(enabled.body.autoSync, true);
+  assert.ok(enabled.body.nextSyncAt);
+  const rangeCalls = [];
+  const original = f.fake.report;
+  f.fake.report = async (...args) => {
+    rangeCalls.push(args.slice(2));
+    return original(...args);
+  };
+  assert.equal((await f.extensions.syncDueReports()).processed, 1);
+  assert.deepEqual(rangeCalls[0], ['2026-10-06', '2026-11-02']);
+  assert.equal((await f.extensions.syncDueReports()).processed, 0);
+  const after = (await f.request('/api/connections')).body.connections.find(
+    (item) => item.id === connection.id,
+  );
+  assert.equal(after.nextSyncAt, '2026-11-05T10:00:00.000Z');
+  await f.request('/api/auth/demo-role', { method: 'POST', body: { role: 'contributor' } });
+  assert.equal(
+    (
+      await f.request(`/api/connections/${connection.id}/sync-settings`, {
+        method: 'POST',
+        body: { autoSync: false },
+      })
+    ).status,
+    403,
+  );
+  await f.request('/api/auth/demo-role', { method: 'POST', body: { role: 'manager' } });
+  const disabled = await f.request(`/api/connections/${connection.id}/sync-settings`, {
+    method: 'POST',
+    body: { autoSync: false },
+  });
+  assert.equal(disabled.body.autoSync, false);
+  assert.equal(disabled.body.nextSyncAt, null);
+  await f.db
+    .prepare('UPDATE service_connections SET capabilities = \'["publish:text"]\' WHERE id = ?')
+    .run(connection.id);
+  assert.equal(
+    (
+      await f.request(`/api/connections/${connection.id}/sync-settings`, {
+        method: 'POST',
+        body: { autoSync: true },
+      })
+    ).status,
+    422,
+  );
+});
+
+test('report leases exclude concurrent imports and fence a stale worker after recovery', async (t) => {
+  const f = await fixture(t);
+  const connection = await f.connect('google');
+  await f.request(`/api/connections/${connection.id}/sync-settings`, {
+    method: 'POST',
+    body: { autoSync: true },
+  });
+  let release;
+  let entered;
+  const waiting = new Promise((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise((resolve) => {
+    entered = resolve;
+  });
+  let calls = 0;
+  f.fake.report = async () => {
+    const call = ++calls;
+    if (call === 1) {
+      entered();
+      await waiting;
+    }
+    return {
+      totals: { users: call === 1 ? 8 : 99, sessions: 10, views: 12, keyEvents: 2 },
+      daily: [],
+      pages: [],
+      sources: [],
+    };
+  };
+  const first = f.extensions.syncDueReports();
+  await started;
+  assert.equal((await f.extensions.syncDueReports()).processed, 0);
+  assert.equal(
+    (await f.request(`/api/connections/${connection.id}/sync`, { method: 'POST', body: {} })).body
+      .code,
+    'report_import_running',
+  );
+  f.setTime('2026-11-04T10:06:00Z');
+  assert.equal((await f.extensions.syncDueReports()).results[0].status, 'imported');
+  release();
+  assert.equal((await first).results[0].status, 'failed');
+  const saved = await f.db
+    .prepare('SELECT report_json FROM website_reports WHERE connection_id = ?')
+    .get(connection.id);
+  assert.equal(JSON.parse(saved.report_json).totals.users, 99);
+  assert.equal(calls, 2);
+});
+
+test('failed scheduled reports release their lease and do not fabricate imported data', async (t) => {
+  const f = await fixture(t);
+  const connection = await f.connect('google');
+  await f.request(`/api/connections/${connection.id}/sync-settings`, {
+    method: 'POST',
+    body: { autoSync: true, syncIntervalHours: 6 },
+  });
+  f.fake.report = async () => {
+    throw new ProviderError('The provider denied permission.', 'permission_denied');
+  };
+  const result = await f.extensions.syncDueReports();
+  assert.equal(result.results[0].status, 'failed');
+  const row = await f.db
+    .prepare('SELECT * FROM service_connections WHERE id = ?')
+    .get(connection.id);
+  assert.equal(row.sync_lease_id, null);
+  assert.equal(row.status, 'needs_attention');
+  assert.equal(row.next_sync_at, '2026-11-04T16:00:00.000Z');
+  assert.equal(
+    await f.db
+      .prepare('SELECT report_json FROM website_reports WHERE connection_id = ?')
+      .get(connection.id),
+    undefined,
+  );
+  assert.equal((await f.extensions.syncDueReports()).processed, 0);
+});
+
+test('a transient reporting outage retries at the configured interval without requiring reauthorization', async (t) => {
+  const f = await fixture(t);
+  const connection = await f.connect('google');
+  await f.request(`/api/connections/${connection.id}/sync-settings`, {
+    method: 'POST',
+    body: { autoSync: true, syncIntervalHours: 6 },
+  });
+  const original = f.fake.report;
+  f.fake.report = async () => {
+    throw new ProviderError('The provider rate limit was reached.', 'provider_rate_limited');
+  };
+  assert.equal((await f.extensions.syncDueReports()).results[0].status, 'failed');
+  const failed = await f.db
+    .prepare('SELECT * FROM service_connections WHERE id = ?')
+    .get(connection.id);
+  assert.equal(failed.status, 'connected');
+  assert.equal(failed.next_sync_at, '2026-11-04T16:00:00.000Z');
+  assert.equal((await f.extensions.syncDueReports()).processed, 0);
+  f.fake.report = original;
+  f.setTime('2026-11-04T16:01:00Z');
+  assert.equal((await f.extensions.syncDueReports()).results[0].status, 'imported');
+  assert.equal(
+    (await f.db.prepare('SELECT error FROM service_connections WHERE id = ?').get(connection.id))
+      .error,
+    null,
+  );
+});
+
+test('the report cron requires its own credential and imports only an explicitly enabled account', async (t) => {
+  const f = await fixture(t);
+  assert.equal((await f.request('/api/reports/cron', { authenticated: false })).status, 401);
+  assert.equal((await f.request('/api/reports/cron')).status, 401);
+  assert.equal(
+    (
+      await f.request('/api/reports/cron', {
+        authenticated: false,
+        headers: { Authorization: 'Bearer wrong' },
+      })
+    ).status,
+    401,
+  );
+  const cron = () =>
+    f.request('/api/reports/cron', {
+      authenticated: false,
+      headers: { Authorization: 'Bearer test-cron-secret' },
+    });
+  assert.equal((await cron()).body.processed, 0);
+  const connection = await f.connect('google');
+  assert.equal((await cron()).body.processed, 0);
+  await f.request(`/api/connections/${connection.id}/sync-settings`, {
+    method: 'POST',
+    body: { autoSync: true },
+  });
+  const result = await cron();
+  assert.equal(result.status, 200);
+  assert.equal(result.body.results[0].status, 'imported');
+  assert.equal(f.calls.published, 0);
+});
+
+test('an expired report worker cannot overwrite connection health after a replacement import succeeds', async (t) => {
+  const f = await fixture(t);
+  const connection = await f.connect('google');
+  await f.request(`/api/connections/${connection.id}/sync-settings`, {
+    method: 'POST',
+    body: { autoSync: true },
+  });
+  let release;
+  let entered;
+  const waiting = new Promise((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const original = f.fake.report;
+  let calls = 0;
+  f.fake.report = async () => {
+    if (++calls === 1) {
+      entered();
+      await waiting;
+      throw new ProviderError('Old authorization was revoked.', 'reauthorization_required', {
+        reauthenticate: true,
+      });
+    }
+    return original();
+  };
+  const first = f.extensions.syncDueReports();
+  await started;
+  f.setTime('2026-11-04T10:06:00Z');
+  assert.equal((await f.extensions.syncDueReports()).results[0].status, 'imported');
+  release();
+  assert.equal((await first).results[0].status, 'failed');
+  const row = await f.db
+    .prepare('SELECT status, error FROM service_connections WHERE id = ?')
+    .get(connection.id);
+  assert.deepEqual({ ...row }, { status: 'connected', error: null });
 });

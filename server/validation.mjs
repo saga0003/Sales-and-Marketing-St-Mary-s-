@@ -45,6 +45,19 @@ const postFields = {
   sourceUrl: optionalUrl,
   mediaUrl: optionalUrl,
   assetId: z.string().trim().min(1).max(200).nullable().optional(),
+  assetIds: z
+    .array(z.string().trim().min(1).max(200))
+    .max(10)
+    .refine((values) => new Set(values).size === values.length, 'Attach each media item only once.')
+    .optional(),
+  publicationOptions: z
+    .object({
+      youtubePrivacy: z.enum(['private', 'unlisted', 'public']).optional(),
+      madeForKids: z.boolean().optional(),
+      containsSyntheticMedia: z.boolean().optional(),
+    })
+    .strict()
+    .optional(),
   destinationIds: z
     .array(z.string().trim().min(1).max(200))
     .max(5)
@@ -125,7 +138,15 @@ export const resourceSchemas = {
     })
     .strict(),
   documents: z
-    .object({ title, category: title, content: z.string().max(100000).default('') })
+    .object({
+      title,
+      category: title,
+      content: z
+        .string()
+        .max(100000)
+        .refine(validDocumentContent, 'Use valid document blocks with plain text content.')
+        .default(''),
+    })
     .strict(),
 };
 
@@ -146,6 +167,39 @@ export const resourcePatchSchemas = Object.fromEntries(
       .strict(),
   ]),
 );
+resourcePatchSchemas.documents = resourcePatchSchemas.documents.extend({
+  expectedVersion: z.number().int().positive(),
+});
+
+function validDocumentContent(content) {
+  if (!content.trim().startsWith('{')) return true;
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return !content.includes('stmarys.blocks');
+  }
+  if (parsed?.schema !== 'stmarys.blocks') return true;
+  const block = z
+    .object({
+      id: z.string().min(1).max(200),
+      type: z.enum(['paragraph', 'heading', 'bullet', 'checklist', 'quote']),
+      text: z.string().max(10000),
+      checked: z.boolean().optional(),
+    })
+    .strict();
+  return z
+    .object({
+      schema: z.literal('stmarys.blocks'),
+      version: z.literal(1),
+      blocks: z
+        .array(block)
+        .max(100)
+        .refine((blocks) => new Set(blocks.map((item) => item.id)).size === blocks.length),
+    })
+    .strict()
+    .safeParse(parsed).success;
+}
 
 export const opportunityCreateSchema = z
   .object({

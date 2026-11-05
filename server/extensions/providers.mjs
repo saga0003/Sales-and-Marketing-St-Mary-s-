@@ -1,36 +1,8 @@
 import { createHash, createHmac } from 'node:crypto';
 
-export const PROVIDERS = {
-  google: {
-    id: 'google',
-    name: 'Google Analytics 4',
-    scopes: ['https://www.googleapis.com/auth/analytics.readonly'],
-    description:
-      'Read website traffic, top pages, acquisition sources and key events from a GA4 property.',
-    requirements: [
-      'A Google Cloud OAuth web application with the exact callback URL below.',
-      'Enable the Google Analytics Admin API and Google Analytics Data API.',
-      'The authorizing Google account needs access to your GA4 property. No advertising or website write permissions are requested.',
-    ],
-  },
-  instagram: {
-    id: 'instagram',
-    name: 'Instagram publishing',
-    scopes: [
-      'pages_show_list',
-      'pages_read_engagement',
-      'instagram_basic',
-      'instagram_content_publish',
-    ],
-    description:
-      'Publish an approved single image post to a professional Instagram account linked to a Facebook Page.',
-    requirements: [
-      'A Meta application with Facebook Login and the exact callback URL below.',
-      'A professional Instagram account linked to a Facebook Page you can manage.',
-      'Grant the listed permissions; Meta app review or app-role access is required. Single-image JPEG posts are supported in this version.',
-    ],
-  },
-};
+import { PROVIDERS, providerGroup } from './provider-definitions.mjs';
+import { createAdditionalProviders } from './additional-providers.mjs';
+export { PROVIDERS } from './provider-definitions.mjs';
 
 export class ProviderError extends Error {
   constructor(message, code = 'provider_error', options = {}) {
@@ -64,17 +36,20 @@ export function createProviderClient({
   now = () => new Date(),
   metaVersion = 'v25.0',
   timeoutMs = 20000,
+  googleAdsVersion = 'v26',
+  linkedinVersion = '202610',
 } = {}) {
   if (!/^v\d{2}\.\d$/.test(metaVersion))
     throw new Error('META_API_VERSION must be a version such as v25.0.');
   const graph = `https://graph.facebook.com/${metaVersion}`;
-  async function json(url, options = {}) {
+  async function request(url, options = {}) {
+    const { responseKind, timeout: requestTimeout, ...fetchOptions } = options;
     let response;
     try {
       response = await fetchImpl(url, {
-        ...options,
+        ...fetchOptions,
         redirect: 'error',
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(requestTimeout ?? timeoutMs),
       });
     } catch {
       throw new ProviderError(
@@ -87,7 +62,9 @@ export function createProviderClient({
     try {
       const buffer = await response.arrayBuffer();
       if (buffer.byteLength > 2 * 1024 * 1024) throw new Error();
-      data = JSON.parse(Buffer.from(buffer).toString('utf8'));
+      const text = Buffer.from(buffer).toString('utf8');
+      data = text ? (response.ok && responseKind === 'empty' ? {} : JSON.parse(text)) : {};
+      if (!text && responseKind !== 'empty' && response.status !== 204) throw new Error();
     } catch {
       throw new ProviderError(
         'The provider returned an unreadable response.',
@@ -101,13 +78,18 @@ export function createProviderClient({
         response.status === 401 || code === 190 || data.error === 'invalid_grant';
       const missingPermission = response.status === 403 || [10, 200].includes(code);
       const limited = response.status === 429 || [4, 17, 32, 613].includes(code);
-      const message = reauthenticate
-        ? 'Authorization expired or was revoked. Reconnect this account.'
-        : missingPermission
-          ? 'The provider denied permission. Check account access, enabled APIs and app review.'
-          : limited
-            ? 'The provider rate limit was reached. Wait before retrying.'
-            : 'The provider rejected the request. Check the account setup and supported media requirements.';
+      const cloudAccessRequired = JSON.stringify(data.error?.details ?? []).includes(
+        'CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION',
+      );
+      const message = cloudAccessRequired
+        ? 'The Google Cloud project is not approved for production Ads accounts. Apply for the appropriate access level in Google Cloud Console.'
+        : reauthenticate
+          ? 'Authorization expired or was revoked. Reconnect this account.'
+          : missingPermission
+            ? 'The provider denied permission. Check account access, enabled APIs and app review.'
+            : limited
+              ? 'The provider rate limit was reached. Wait before retrying.'
+              : 'The provider rejected the request. Check the account setup and supported media requirements.';
       throw new ProviderError(
         message,
         reauthenticate
@@ -120,8 +102,9 @@ export function createProviderClient({
         { httpStatus: response.status, ambiguous: response.status >= 500, reauthenticate },
       );
     }
-    return data;
+    return { data, headers: response.headers, status: response.status };
   }
+  const json = async (url, options) => (await request(url, options)).data;
   const bearer = (accessToken) => ({ Authorization: `Bearer ${token(accessToken)}` });
   const googleForm = (body) =>
     json('https://oauth2.googleapis.com/token', {
@@ -130,7 +113,9 @@ export function createProviderClient({
       body: new URLSearchParams(body).toString(),
     });
   const expiry = (seconds) =>
-    Number.isFinite(Number(seconds)) ? now().getTime() + Number(seconds) * 1000 : null;
+    seconds !== undefined && seconds !== null && Number.isFinite(Number(seconds))
+      ? now().getTime() + Number(seconds) * 1000
+      : null;
   function metaUrl(path, accessToken, secret, query = {}) {
     const url = new URL(`${graph}/${path}`);
     for (const [key, value] of Object.entries(query))
@@ -142,15 +127,16 @@ export function createProviderClient({
       );
     return url;
   }
-  return {
+  const client = {
     authorize(provider, credentials, redirectUri, state, verifier) {
-      if (provider === 'google') {
+      if (providerGroup(provider) === 'google') {
         const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
         url.search = new URLSearchParams({
           client_id: credentials.clientId,
           redirect_uri: redirectUri,
           response_type: 'code',
-          scope: PROVIDERS.google.scopes.join(' '),
+          scope: PROVIDERS[provider].scopes.join(' '),
+          include_granted_scopes: 'true',
           state,
           access_type: 'offline',
           prompt: 'consent',
@@ -164,14 +150,14 @@ export function createProviderClient({
         client_id: credentials.clientId,
         redirect_uri: redirectUri,
         response_type: 'code',
-        scope: PROVIDERS.instagram.scopes.join(','),
+        scope: PROVIDERS[provider].scopes.join(','),
         state,
         auth_type: 'rerequest',
       }).toString();
       return url.toString();
     },
     async exchange(provider, credentials, redirectUri, code, verifier) {
-      if (provider === 'google') {
+      if (providerGroup(provider) === 'google') {
         const data = await googleForm({
           client_id: credentials.clientId,
           client_secret: credentials.clientSecret,
@@ -180,15 +166,19 @@ export function createProviderClient({
           code_verifier: verifier,
           grant_type: 'authorization_code',
         });
-        if (data.scope && !data.scope.split(' ').includes(PROVIDERS.google.scopes[0]))
+        if (
+          data.scope &&
+          !PROVIDERS[provider].scopes.every((scope) => data.scope.split(' ').includes(scope))
+        )
           throw new ProviderError(
-            'Analytics read permission was not granted. Reconnect and allow this permission.',
+            'A required permission was not granted. Reconnect and allow the permissions listed for this service.',
             'permission_denied',
           );
         return {
           accessToken: token(data.access_token),
           refreshToken: data.refresh_token ? token(data.refresh_token) : null,
           expiresAt: expiry(data.expires_in),
+          scopes: data.scope ? data.scope.split(' ') : PROVIDERS[provider].scopes,
         };
       }
       const url = new URL(`${graph}/oauth/access_token`);
@@ -207,7 +197,20 @@ export function createProviderClient({
         fb_exchange_token: token(initial.access_token),
       }).toString();
       const extended = await json(longLivedUrl);
-      return { accessToken: token(extended.access_token), expiresAt: expiry(extended.expires_in) };
+      const accessToken = token(extended.access_token);
+      const permissionData = await json(
+        metaUrl('me/permissions', accessToken, credentials.clientSecret),
+        { headers: bearer(accessToken) },
+      );
+      const granted = (permissionData.data ?? [])
+        .filter((item) => item.status === 'granted')
+        .map((item) => item.permission);
+      if (!PROVIDERS[provider].scopes.every((scope) => granted.includes(scope)))
+        throw new ProviderError(
+          'Required permissions were declined. Reconnect and allow the listed permissions.',
+          'permission_denied',
+        );
+      return { accessToken, expiresAt: expiry(extended.expires_in), scopes: granted };
     },
     async refresh(credentials, current) {
       if (!current.refreshToken)
@@ -360,7 +363,7 @@ export function createProviderClient({
         })),
       };
     },
-    async createContainer(accountId, current, credentials, caption, imageUrl) {
+    async createContainer(accountId, current, credentials, caption, imageUrl, options = {}) {
       const data = await json(
         metaUrl(`${numericId(accountId)}/media`, current.pageAccessToken, credentials.clientSecret),
         {
@@ -369,7 +372,11 @@ export function createProviderClient({
             ...bearer(current.pageAccessToken),
             'Content-Type': 'application/x-www-form-urlencoded',
           },
-          body: new URLSearchParams({ image_url: imageUrl, caption }).toString(),
+          body: new URLSearchParams({
+            ...(imageUrl ? { image_url: imageUrl } : {}),
+            ...(caption ? { caption } : {}),
+            ...options,
+          }).toString(),
         },
       );
       return numericId(data.id);
@@ -432,4 +439,21 @@ export function createProviderClient({
       );
     },
   };
+  return createAdditionalProviders({
+    base: client,
+    json,
+    request,
+    bearer,
+    googleForm,
+    expiry,
+    metaUrl,
+    token,
+    numericId,
+    ProviderError,
+    now,
+    fetch: fetchImpl,
+    timeoutMs,
+    googleAdsVersion,
+    linkedinVersion,
+  });
 }

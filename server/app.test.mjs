@@ -669,7 +669,7 @@ test('workspace CRUD validates URLs and dates, preserves omitted fields, and nev
   assert.equal(document.status, 201);
   const revisedDocument = await manager.request(`/api/documents/${document.body.id}`, {
     method: 'PATCH',
-    body: { title: 'Our content policy' },
+    body: { title: 'Our content policy', expectedVersion: document.body.version },
   });
   assert.equal(revisedDocument.status, 200);
   assert.equal(revisedDocument.body.content, document.body.content);

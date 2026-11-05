@@ -1,9 +1,10 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createPrivateKey, sign } from 'node:crypto';
 import sharp from 'sharp';
 import { HttpError } from '../validation.mjs';
 import { hash } from './crypto.mjs';
+import { MAX_VIDEO_BYTES, readVideoResponse } from '../video.mjs';
 
 export const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 export const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -94,6 +95,8 @@ export function publicAsset(row) {
     sha256: row.sha256,
     width: Number(row.width),
     height: Number(row.height),
+    kind: row.kind ?? (row.mime_type === 'video/mp4' ? 'video' : 'image'),
+    duration: row.duration == null ? null : Number(row.duration),
     url: `/api/media/${encodeURIComponent(row.id)}/content`,
     ownerId: row.owner_id,
     createdAt: row.created_at,
@@ -118,7 +121,7 @@ export function createStorageBroker({
   const key = createPrivateKey(privateKey);
   if (key.asymmetricKeyType !== 'ed25519')
     throw new Error('MEDIA_BROKER_PRIVATE_KEY must be an Ed25519 PEM private key.');
-  return async (command) => {
+  const call = async (command) => {
     const rawBody = JSON.stringify(command);
     const timestamp = String(Math.floor(now().getTime() / 1000));
     const signature = sign(null, Buffer.from(`${timestamp}.${hash(rawBody)}`), key).toString(
@@ -150,6 +153,8 @@ export function createStorageBroker({
       );
     }
   };
+  call.origin = endpoint.origin;
+  return call;
 }
 
 export function createStorage({
@@ -158,6 +163,7 @@ export function createStorage({
   blobStoreId,
   vercel = false,
   broker,
+  fetch: fetchImpl = globalThis.fetch,
   now = () => new Date(),
 } = {}) {
   const localRoot = resolve(localDirectory ?? 'data/media');
@@ -173,7 +179,7 @@ export function createStorage({
     ...(blobStoreId ? { storeId: blobStoreId } : {}),
   };
   function safePath(path) {
-    if (!/^assets\/asset_[A-Za-z0-9_-]{24}\.jpg$/.test(path))
+    if (!/^assets\/asset_[A-Za-z0-9_-]{24}\.(?:jpg|mp4)$/.test(path))
       throw new Error('Invalid media storage path.');
     return path;
   }
@@ -181,6 +187,90 @@ export function createStorage({
     kind,
     configured: kind !== 'unconfigured',
     canDeliver: ['broker', 'blob'].includes(kind),
+    canUploadVideo: ['broker', 'local'].includes(kind),
+    async removeUploadedPath(path) {
+      safePath(path);
+      if (kind === 'broker') {
+        await broker({ operation: 'removeExpiredUpload', path });
+        return;
+      }
+      if (kind === 'local' && !vercel) {
+        try {
+          await unlink(resolve(localRoot, path));
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+        }
+        return;
+      }
+      throw new HttpError(
+        503,
+        'Abandoned-upload cleanup requires the private storage connection.',
+        'storage_unavailable',
+      );
+    },
+    async prepareVideoUpload(id) {
+      const path = safePath(`assets/${id}.mp4`);
+      if (kind === 'local') return { kind, path, uploadUrl: null };
+      if (kind !== 'broker')
+        throw new HttpError(
+          503,
+          'Direct video uploads require the workspace’s private Supabase storage connection.',
+          'video_storage_required',
+        );
+      const result = await broker({ operation: 'prepareVideoUpload', path });
+      const target = new URL(result.url);
+      if (
+        target.origin !== broker.origin ||
+        !target.pathname.startsWith('/storage/v1/object/upload/sign/') ||
+        !target.pathname.endsWith(`/${path}`) ||
+        !target.searchParams.get('token')
+      )
+        throw new Error('Invalid signed video upload URL.');
+      return { kind, path, uploadUrl: target.toString() };
+    },
+    async putVideo(id, bytes) {
+      if (kind !== 'local' || vercel)
+        throw new HttpError(
+          409,
+          'Use the direct private upload URL for this video.',
+          'direct_upload_required',
+        );
+      const path = safePath(`assets/${id}.mp4`);
+      if (!Buffer.isBuffer(bytes) || bytes.length > MAX_VIDEO_BYTES)
+        throw new HttpError(413, 'Choose a video of at most 40 MiB.', 'video_too_large');
+      await mkdir(resolve(localRoot, 'assets'), { recursive: true, mode: 0o700 });
+      try {
+        await writeFile(resolve(localRoot, path), bytes, { flag: 'wx', mode: 0o600 });
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        const old = await readFile(resolve(localRoot, path));
+        if (hash(old) !== hash(bytes))
+          throw new HttpError(
+            409,
+            'This upload already contains different bytes. Start a new upload.',
+            'upload_exists',
+          );
+      }
+      return { kind, path, url: null };
+    },
+    async readVideoUpload(path) {
+      safePath(path);
+      if (!path.endsWith('.mp4')) throw new Error('Invalid video path.');
+      if (kind === 'local' && !vercel) return await readFile(resolve(localRoot, path));
+      if (kind !== 'broker')
+        throw new HttpError(503, 'Video storage is unavailable.', 'storage_unavailable');
+      const result = await broker({ operation: 'signedUrl', path, expiresIn: 300 });
+      const target = new URL(result.url);
+      if (
+        target.origin !== broker.origin ||
+        !target.pathname.startsWith('/storage/v1/object/sign/') ||
+        !target.pathname.endsWith(`/${path}`)
+      )
+        throw new Error('Invalid signed video read URL.');
+      return await readVideoResponse(
+        await fetchImpl(target, { redirect: 'error', signal: AbortSignal.timeout(45000) }),
+      );
+    },
     async put(id, bytes) {
       const path = safePath(`assets/${id}.jpg`);
       if (kind === 'unconfigured')
@@ -218,14 +308,18 @@ export function createStorage({
       const path = safePath(asset.storage_path);
       let bytes;
       if (asset.storage_kind === 'broker' && broker) {
-        const result = await broker({ operation: 'read', path });
-        if (
-          result.contentType !== 'image/jpeg' ||
-          typeof result.dataBase64 !== 'string' ||
-          result.dataBase64.length > MAX_IMAGE_BYTES * 1.4
-        )
-          throw new Error('Invalid private image response.');
-        bytes = Buffer.from(result.dataBase64, 'base64');
+        if (asset.mime_type === 'video/mp4') {
+          bytes = await this.readVideoUpload(path);
+        } else {
+          const result = await broker({ operation: 'read', path });
+          if (
+            result.contentType !== 'image/jpeg' ||
+            typeof result.dataBase64 !== 'string' ||
+            result.dataBase64.length > MAX_IMAGE_BYTES * 1.4
+          )
+            throw new Error('Invalid private image response.');
+          bytes = Buffer.from(result.dataBase64, 'base64');
+        }
       } else if (asset.storage_kind === 'blob' && (blobToken || blobStoreId)) {
         const { get } = await import('@vercel/blob');
         const result = await get(path, { ...blobOptions, access: 'private', useCache: false });
@@ -252,7 +346,16 @@ export function createStorage({
       const path = safePath(asset.storage_path);
       if (asset.storage_kind === 'broker' && broker) {
         const result = await broker({ operation: 'signedUrl', path, expiresIn: 3600 });
-        if (typeof result.url !== 'string' || !result.url.startsWith('https://'))
+        const target = typeof result.url === 'string' ? new URL(result.url) : null;
+        if (
+          !target ||
+          target.protocol !== 'https:' ||
+          target.origin !== broker.origin ||
+          !target.pathname.startsWith('/storage/v1/object/sign/') ||
+          !target.pathname.endsWith(`/${path}`) ||
+          target.username ||
+          target.password
+        )
           throw new Error('Storage did not return a secure media delivery URL.');
         return result.url;
       }

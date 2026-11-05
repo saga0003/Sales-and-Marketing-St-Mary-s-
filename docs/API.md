@@ -1,362 +1,466 @@
-# Workspace API
+# Workspace API — version 0.3
 
-This release provides a persistent team workspace, source and competitor bookmarks,
-content drafting, revision-specific manager approval, local scheduling, tasks,
-documents, and an audit trail. It does **not** connect to a social network, fetch
-live news, import analytics, send messages, or publish externally.
+This release supports a persistent team workspace, revision-specific approvals,
+private images and MP4 videos, durable publishing jobs, provider reports, an
+in-app notification inbox, monitored research sources, verified-site SEO checks
+and an AEO/GEO observation register. An implemented connector is not an
+authorized account: live provider operations require the relevant developer app,
+permissions, account selection and healthy connection.
 
-`publishingEnabled` is always `false`. A post in `scheduled` is a **local plan**.
-The server never turns it into `published`, even after its planned time passes.
-There is no publication endpoint or background publisher.
+The authoritative client types are in `src/lib/types.ts`. The detailed provider
+and intelligence contracts are in
+[extensions/FRONTEND-CONTRACT.md](../server/extensions/FRONTEND-CONTRACT.md) and
+[intelligence/FRONTEND-CONTRACT.md](../server/intelligence/FRONTEND-CONTRACT.md).
+See [Connecting accounts](CONNECTING-ACCOUNTS.md) for provider setup and
+[the intelligence guide](INTELLIGENCE-GUIDE.md) for monitoring limits.
 
-## Runtime and startup
+## Runtime and persistence
 
-- Node.js 24 or newer; ES modules (`.mjs`).
-- Express 5, Zod 4, and Node's built-in `node:sqlite`.
-- `server/index.mjs` is the executable entry point.
-- `server/app.mjs` exports `createApp(options)` for integration tests.
-- Port defaults to `3001`; bind address defaults to `0.0.0.0`.
-- Built frontend files are served from `dist/` if `dist/index.html` exists at startup.
-- In development, Vite should proxy `/api` with `changeOrigin: false`.
+- Node.js 24, Express 5, ES modules and Zod validation.
+- SQLite for a local persistent server; PostgreSQL for Vercel. Hosted startup
+  rejects missing `DATABASE_URL` and automatic-sign-in `DEMO_MODE`.
+- The browser uses the application’s email/password login. Supabase can host
+  PostgreSQL and private media; this release does **not** use Supabase Auth.
+- Core migrations are under `server/migrations/`; provider and intelligence
+  migrations have separate version markers in `workspace_metadata`.
+- Hosted deployments normally set `AUTO_MIGRATE=false`; apply all required
+  migrations before deploying. Initialization fails on a missing module version.
+- `APP_ORIGIN` supplies the canonical application origin, account setup links and
+  provider callbacks. `CREDENTIAL_ENCRYPTION_KEY` encrypts provider credentials.
+- `PUBLISHING_ENABLED=true` enables external publication. The bootstrap
+  `publishingEnabled` flag reflects this switch. Disabled publication does not
+  turn scheduled plans into published posts.
+- `CRON_SECRET` protects all three background-worker routes.
+  `INTELLIGENCE_AUTOMATION_ENABLED=false` disables scheduled source checks.
+- Local `DEMO_MODE=true` contains labelled examples and permits automatic demo
+  sign-in. Hosted evaluation uses authenticated `EVALUATION_MODE`; it does not
+  authorize social accounts or substitute sample metrics for provider reports.
 
-### Configuration
-
-| Variable                   | Default                                              | Purpose                                                                                                                     |
-| -------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `DEMO_MODE`                | `false`                                              | Set explicitly to `true` for a sample workspace with automatic demo sign-in.                                                |
-| `DATABASE_PATH`            | `data/workspace.sqlite` relative to the project      | Persistent SQLite database. Use a durable volume on a server.                                                               |
-| `PORT`                     | `3001`                                               | HTTP listening port.                                                                                                        |
-| `BIND_ADDRESS`             | `0.0.0.0`                                            | HTTP listening address.                                                                                                     |
-| `BOOTSTRAP_ADMIN_EMAIL`    | None                                                 | Required when creating the first production workspace.                                                                      |
-| `BOOTSTRAP_ADMIN_PASSWORD` | None                                                 | Required on first production initialization; 12–256 characters.                                                             |
-| `BOOTSTRAP_ADMIN_NAME`     | `Workspace manager`                                  | Initial production manager's display name.                                                                                  |
-| `APP_ORIGIN`               | Current request origin                               | Optional exact trusted HTTP(S) application origin for mutation checks. Set it to the public application URL behind a proxy. |
-| `COOKIE_SECURE`            | `true` when `NODE_ENV=production`, otherwise `false` | Mark session cookies `Secure`; use `true` for public HTTPS deployments.                                                     |
-| `TRUST_PROXY`              | `false`                                              | Set to `true` only when running behind exactly one trusted reverse proxy.                                                   |
-
-Boolean environment values accept `true`/`false` or `1`/`0`. Invalid values fail
-startup. There are no default production credentials. Bootstrap credentials are
-used only when initializing an empty production database; changing the variables
-does not silently change an existing account's password.
-
-### Demo and production data
-
-Demo mode seeds an **empty** database once. It includes illustrative posts,
-opportunities, tasks, documents, campaigns and analytics. Official-source URLs
-are bookmarks, not evidence that a notice has been checked. Competitor examples
-are explicitly fictional. All integrations remain disconnected.
-
-An unauthenticated demo bootstrap creates a manager session. The demo role
-switch allows trying the contributor workflow. Demo accounts have random,
-unpublished passwords, so they cannot accidentally become known production
-credentials. People opening the same demo deployment share its sample records.
-Use production mode for real team work.
-
-The database stores its mode. A demo database cannot be reopened in production,
-or vice versa. Use a separate `DATABASE_PATH`. Restarting the application does
-not reinsert deleted examples or overwrite edited records.
-
-A new production workspace contains its initial manager and an initialization
-audit entry. Content, watchlists, source bookmarks, tasks, documents and analytics
-start empty. No illustrative figures are returned in production.
+Password hashes, session tokens, provider client secrets and account credentials
+never appear in normal API responses or audit details. Private media bytes live
+in the configured storage service, with metadata and immutable content hashes in
+the database.
 
 ## Request conventions
 
-All endpoints are same-origin under `/api`. Send JSON bodies with
-`Content-Type: application/json`. Bodies are limited to 256 KiB. Unknown input
-fields are rejected; client-supplied roles, ownership, approval fields and
-publication states are never accepted as post input.
+All routes below are same-origin under `/api`. JSON bodies use
+`Content-Type: application/json` and have a 256 KiB limit; raw media upload routes
+have separate limits. Unknown input fields are rejected.
 
-Successful list reads use `GET /api/bootstrap`. It returns the `WorkspaceData`
-shape in `src/lib/types.ts`, including the current user, active team members,
-all workspace collections, the latest 150 audit entries, integration status,
-analytics, `demoMode`, `publishingEnabled`, and a session CSRF token.
-
-Successful entity creation/update endpoints return the **entity directly**.
-Creation uses HTTP `201`; updates and transitions use `200`. Deletes return
-`{ "ok": true }`. The UI can reload bootstrap after a mutation to refresh
-related records and the audit trail.
-
-### Authentication and CSRF
-
-Production authentication uses email and password. Passwords are hashed with
-scrypt using independent random salts. The browser receives an opaque session
-cookie named `smis_session`; its value is hashed before storage in SQLite.
-Cookies are `HttpOnly`, `SameSite=Lax`, scoped to `/`, and optionally `Secure`.
-Sessions expire after 12 hours and survive application restarts.
-
-Every authenticated mutation—including logout and the demo role switch—requires:
+Except for public configuration, sign-in/setup, the OAuth callback and
+secret-protected cron routes, endpoints require an active authenticated session.
+A **manager** restriction below is enforced on the server. All authenticated
+mutations also require:
 
 ```http
-x-csrf-token: <csrfToken returned by bootstrap or login>
+x-csrf-token: <csrfToken returned by login or bootstrap>
 ```
 
-The token must match the active session. Login and demo role switching rotate
-both the session cookie and CSRF token and revoke the previous session for that
-browser. An `Origin` or `Referer` header, when supplied, must match `APP_ORIGIN`
-or the application's request origin. Cross-site Fetch Metadata is rejected.
-Non-browser API clients may omit `Origin` but still need the session cookie and
-CSRF token for authenticated mutations. The API does not enable cross-origin
-access.
+The session cookie is `smis_session`: opaque, hashed in the database, HttpOnly,
+SameSite=Lax and Secure on configured HTTPS production deployments. The default
+session lifetime is 12 hours. Supplied Origin/Referer and Fetch Metadata must pass
+the application’s origin checks. There is no cross-origin public API.
 
-The login endpoint is unauthenticated and origin-checked. A process-local limiter
-limits sign-in attempts by both IP address and account. For a multi-instance
-deployment, use a shared limiter at the edge or replace this store with a shared
-implementation.
+Login/setup/password attempt limits are stored in the database. Passwords use
+scrypt with per-password salts. Account setup links are single-use and expire
+after 24 hours; this expiry applies to the link, not the application or its data.
+Email delivery and public self-registration are not implemented.
 
-## Endpoints
+Creation usually returns HTTP 201 and updates HTTP 200. Response envelopes vary:
+core records generally return the entity directly, while lists, monitoring and
+job routes use the envelopes documented below. Do not assume every endpoint has
+the same wrapper. Deletes normally return `{ok:true}`.
 
-### Session and team
+### Bootstrap
 
-| Method and route           | Body                              | Result / access                                                                                                                   |
-| -------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/health`          | None                              | `{status:"ok", demoMode, publishingEnabled:false}`. No authentication required.                                                   |
-| `GET /api/bootstrap`       | None                              | `WorkspaceData`. Production returns `401 {error, demoMode:false}` without a session. Demo creates a manager session when missing. |
-| `POST /api/auth/login`     | `{email, password}`               | `{user, csrfToken}` plus session cookie.                                                                                          |
-| `POST /api/auth/logout`    | None                              | `{ok:true}` and revoked/cleared current session. Requires CSRF.                                                                   |
-| `POST /api/auth/demo-role` | `{role:"manager"\|"contributor"}` | `{user, csrfToken}` with a new demo session. Demo only; production returns `404`.                                                 |
-| `POST /api/users`          | `{name, email, role, password}`   | Creates a team member. Manager only. Password must be at least 12 characters. No invitation email is sent.                        |
+`GET /api/bootstrap` returns the current user, CSRF token, team and workspace
+collections, audit history, provider setup state, connections, media assets,
+publication jobs, website analytics and platform reports. It also includes
+notifications/preferences, the `intelligence` object, storage status,
+`demoMode`, `evaluationMode` and `publishingEnabled`.
 
-User records returned to the browser contain only `id`, `name`, `email`, `role`
-and derived `initials`. Password hashes and session storage are never exposed.
-The first release does not include password recovery, account editing, or
-account removal endpoints.
+Production returns 401 without a session. Only explicitly configured local demo
+mode creates a demo session automatically. Refresh bootstrap after a mutation
+when the UI needs associated records, decisions or new notifications.
 
-### Content
+## Session and team
 
-| Method and route                 | Body                                                | Result                                                                     |
-| -------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------- |
-| `GET /api/posts/:id`             | None                                                | A `Post`. Any authenticated team member may read team content.             |
-| `POST /api/posts`                | `PostInput` without `revision`                      | A new draft at revision `1`, owned by the authenticated user.              |
-| `PATCH /api/posts/:id`           | Changed `PostInput` fields plus required `revision` | Updated `Post`; content changes increment the revision and reset approval. |
-| `POST /api/posts/:id/transition` | `{action, revision, feedback?, scheduledAt?}`       | Updated `Post` after a permitted state change.                             |
+| Method and route                 | Body                              | Result / access                                                                              |
+| -------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------- |
+| `GET /api/health`                | None                              | Public runtime status, mode and storage driver/persistence.                                  |
+| `GET /api/config`                | None                              | Public workspace/login/setup configuration; no credentials.                                  |
+| `GET /api/bootstrap`             | None                              | Current authenticated workspace.                                                             |
+| `POST /api/auth/login`           | `{email,password}`                | `{user,csrfToken}` and session cookie.                                                       |
+| `POST /api/auth/setup`           | `{token,password}`                | Redeem setup/recovery token and establish access.                                            |
+| `POST /api/auth/logout`          | Empty                             | Revoke/clear the current session.                                                            |
+| `POST /api/auth/password`        | `{currentPassword,password}`      | Change password and rotate sessions. New password: 12–256 characters.                        |
+| `POST /api/auth/demo-role`       | `{role:"manager"\|"contributor"}` | Local demo only; returns a rotated session/CSRF token.                                       |
+| `GET /api/team`                  | None                              | All team accounts; manager only.                                                             |
+| `POST /api/users`                | `{name,email,role,password?}`     | Manager creates a user. Without password, response includes a personal setup URL and expiry. |
+| `PATCH /api/users/:id`           | Partial `{name,role,active}`      | Manager edits access; last-manager/self-access safeguards apply.                             |
+| `POST /api/users/:id/setup-link` | `{purpose?:"setup"\|"recovery"}`  | Manager issues a replacement link; no email is sent.                                         |
 
-Example creation input:
+Use a second email address and a separate browser session for a contributor
+acceptance test. A setup URL is an access credential and should be shared only
+with its intended recipient.
+
+## Content and approval
+
+| Method and route                 | Body                                       | Result                                                              |
+| -------------------------------- | ------------------------------------------ | ------------------------------------------------------------------- |
+| `GET /api/posts/:id`             | None                                       | Post visible to the authenticated workspace.                        |
+| `POST /api/posts`                | Post input                                 | New draft, revision 1, owned by the caller.                         |
+| `PATCH /api/posts/:id`           | Changed fields plus required `revision`    | Updated post; editing increments the revision and revokes approval. |
+| `POST /api/posts/:id/transition` | `{action,revision,feedback?,scheduledAt?}` | Validated state transition.                                         |
+| `POST /api/posts/:id/duplicate`  | Empty                                      | Independent unapproved draft.                                       |
+| `GET /api/posts/:id/history`     | None                                       | Saved revision history.                                             |
+| `GET /api/posts/:id/comments`    | None                                       | Review discussion.                                                  |
+| `POST /api/posts/:id/comments`   | `{body,revision}`                          | Comment attached to the specified revision.                         |
+
+Example draft with no external publishing destination:
 
 ```json
 {
   "title": "Questions to bring on a campus visit",
   "caption": "Ask about subjects, student support and how progress is shared.",
-  "platforms": ["instagram", "facebook"],
-  "format": "Carousel",
+  "platforms": ["instagram"],
+  "format": "Post",
   "institution": "St. Mary’s ISC",
   "scheduledAt": null,
   "language": "English",
-  "palette": "navy",
+  "palette": "violet",
   "sourceUrl": "",
-  "mediaUrl": ""
+  "mediaUrl": "",
+  "assetIds": [],
+  "destinationIds": []
 }
 ```
 
-Important field rules:
+A platform selection describes the content; `destinationIds` selects actual
+authorized accounts. Destinations may be empty throughout an interface-only
+review test.
 
-- Titles are 1–180 characters. Captions may be empty while drafting and are
-  limited to 12,000 characters; submitting requires nonempty content.
-- Platforms are unique selections from `instagram`, `facebook`, `youtube`,
-  `linkedin`, and `google_business`; choose at least one.
-- Formats are `Post`, `Carousel`, `Reel`, `Video`, or `Article`.
-- Language is `English`, `Kannada`, or `English + Kannada`.
-- Palette is `violet`, `navy`, `sage`, or `peach`.
-- `scheduledAt` is an ISO 8601 datetime with a time zone, or `null`. The server
-  normalizes it to UTC. The frontend displays India Standard Time.
-- `sourceUrl` and `mediaUrl` may be empty. Otherwise they must be complete HTTP(S)
-  URLs without embedded credentials. The API stores them and does not fetch them.
-- `ownerId`, `status`, approval fields, timestamps and sample flags are assigned
-  server-side. A browser cannot set `published`.
+Titles are at most 180 characters and captions 12,000; publishing adapters apply
+stricter platform limits. Formats are `Post`, `Carousel`, `Reel`, `Video` and
+`Article`, but not every format can be published to every destination. Ordered
+`assetIds` supports at most ten unique immutable attachments. The legacy
+`assetId` remains supported for a single attachment. `mediaUrl` alone is not an
+approved uploaded asset.
 
-### Revision and permission rules
+Transition actions are `submit`, `approve`, `reject`, `request_changes`,
+`schedule` and `unschedule`. Contributors can edit/submit their own eligible
+drafts; managers make review decisions. Rejection/change requests require useful
+feedback. Submission needs nonempty content. Stale revisions return 409.
+Scheduling requires the current approved revision and a future timestamp.
 
-A content revision describes the title, copy, channels, format, institution,
-language, preview, source, media and planned date saved through the editor.
+Approval binds the exact caption, ordered media hashes, destination accounts and
+publication options. Edits invalidate that approval and cancel eligible pending
+jobs. Active or ambiguous sends block unsafe edits. Approval without destinations
+stays inside the workspace. Approval with real destinations creates durable jobs
+subject to the publication switch and adapter validation.
 
-Contributors may create drafts and edit or submit their **own** records in
-`draft`, `changes_requested` or `rejected`. They cannot edit another author's
-content, change an item under review, approve, reject, or schedule.
-
-Managers may edit any non-published draft. An actual content edit increments its
-revision, changes its status to `draft`, clears approval metadata, and removes
-its active local queue state. The intended date may remain available as a
-planning field, but the post is no longer `scheduled`. An unchanged PATCH does
-not create a spurious revision. Published content cannot be edited in this
-release.
-
-Every edit and transition compares the submitted revision with the stored
-revision **inside a database transaction**. A mismatch returns `409
-stale_revision`; it never overwrites the newer content. The frontend must reload
-the current draft and ask the user to review it.
-
-### State transitions
-
-| Action            | Allowed current state                    | Who               | Result                                                                   |
-| ----------------- | ---------------------------------------- | ----------------- | ------------------------------------------------------------------------ |
-| `submit`          | `draft`, `changes_requested`, `rejected` | Author or manager | `in_review`; clears previous active feedback.                            |
-| `approve`         | `in_review`                              | Manager           | `approved`, with `approvedRevision`, `approvedBy` and `approvedAt`.      |
-| `request_changes` | `in_review`, `approved`, `scheduled`     | Manager           | `changes_requested`; requires feedback; clears approval and queue state. |
-| `reject`          | `in_review`, `approved`, `scheduled`     | Manager           | `rejected`; requires feedback; clears approval and queue state.          |
-| `schedule`        | `approved` with exact current approval   | Manager           | `scheduled`, only with a future datetime. Local planning only.           |
-| `unschedule`      | `scheduled`                              | Manager           | `approved`; clears the planned datetime.                                 |
-
-Approval and other workflow transitions do not increment the **content**
-revision. Their decisions are appended to the audit trail. Scheduling normally
-uses the saved `scheduledAt`; a manager can also explicitly supply a future
-`scheduledAt` in the scheduling transition. That scheduling action is separately
-audited and does not change the approved copy or destinations.
-
-There is no `publish` action. A future connector must implement provider
-authorization, account binding, delivery/retry handling and external publication
-confirmation before any live publishing feature is enabled. It must retain the
-revision checks and cannot treat a queued job as a successful publication.
-
-### Intelligence
-
-| Method and route                    | Body                                                                                                        | Result / rules                                                                                             |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `POST /api/opportunities`           | `{title, summary, source, sourceUrl, category, audience, contentAngle, priority, sourceKind, publishedAt?}` | Creates a manual research brief. Any authenticated team member; always `status: "new"`, `verified: false`. |
-| `PATCH /api/opportunities/:id`      | `{status?:"new"\|"saved"\|"dismissed", verified?:boolean}`                                                  | An `Opportunity`. Only managers may change `verified`.                                                     |
-| `POST /api/opportunities/:id/draft` | `{institution?, platforms?, format?, language?}` or `{}`                                                    | A new `Post`, or the existing draft if this opportunity was already converted.                             |
-
-Team members can add real research briefs in production without a live ingestion
-connector. `source` is the publisher's name, and `sourceUrl` is a required HTTP(S)
-link without embedded credentials. `sourceKind` is either `official` or
-`competitor`; this is a **manual classification, not verification**. The server
-does not open the link. A manager must separately record verification after
-reviewing the original evidence. Client-supplied `id`, `status`, `verified` and
-other server-owned fields are rejected.
-
-Categories are `Exam update`, `Board update`, `Medical seats`, `Competitor`, and
-`Content idea`; priority is `high`, `medium`, or `low`. Title and publisher are
-limited to 180 characters, summary to 6,000, audience to 300, and content angle
-to 2,000. All are required and must be nonempty. `publishedAt` accepts an optional
-ISO 8601 datetime with a time zone. When omitted, it defaults to the record's
-creation time; that default is not proof of when the publisher issued a notice.
-Creation and its audit entry are committed in one transaction.
-
-Draft generation here is a deterministic brief builder, not an AI service. It
-retains the source URL, summary and proposed angle, marks pending verification,
-and includes an explicit sample notice when appropriate. A manager marking a
-sample opportunity verified does not change `sourceKind: "sample"` into official
-evidence. Retrying the draft action returns the same post rather than creating
-duplicates. Changing an opportunity later does not silently rewrite its draft.
-
-Production has no live ingestion service yet. Adding a source or competitor is
-a bookmark operation; it does not start a watcher or claim the source was checked.
-
-### Watchlists, tasks and documents
-
-Authenticated team members can collaborate on these records. All mutations are
-audited. Each collection supports `POST /api/<collection>`, `PATCH
-/api/<collection>/:id`, and `DELETE /api/<collection>/:id`. PATCH accepts any
-nonempty subset of its writable fields; omitted values are retained.
-
-| Collection    | Writable fields                                                    | Creation defaults / notes                                                                                                 |
-| ------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `competitors` | `name`, `platform`, `url`, `category`, `notes`, `monitoringStatus` | Platform also accepts `website`. Category defaults to `Education`, notes to empty, monitoring to `manual`.                |
-| `sources`     | `name`, `url`, `category`, `status`                                | Status defaults to `manual`.                                                                                              |
-| `tasks`       | `title`, `owner`, `dueDate`, `status`, `priority`                  | `dueDate` is a real `YYYY-MM-DD` calendar date. Status defaults to `todo`; priority to `medium`. Owner is a display name. |
-| `documents`   | `title`, `category`, `content`                                     | Content defaults to empty and can contain up to 100,000 characters of plain text/Markdown.                                |
-
-Watchlist status is limited to `manual` or `paused`. `ready` is deliberately
-rejected while no monitoring worker exists. `lastCheckedAt` cannot be supplied
-by a browser. Task status is `todo`, `in_progress`, or `done`; priority is `high`,
-`medium`, or `low`.
-
-Documents are stored as text, not executed or rendered as trusted HTML. The
-first release supports whole-document updates, not simultaneous character-level
-collaboration. Concurrent document/task edits follow the last successful save;
-content posts have the stronger revision-conflict protection described above.
-
-## Error format
-
-API errors return JSON:
+YouTube video approval additionally requires:
 
 ```json
 {
-  "error": "This draft has changed since you opened it. Refresh and review the latest revision.",
-  "code": "stale_revision"
+  "publicationOptions": {
+    "youtubePrivacy": "private",
+    "madeForKids": false,
+    "containsSyntheticMedia": false
+  }
 }
 ```
 
-| Status | Meaning                                                                                         |
-| ------ | ----------------------------------------------------------------------------------------------- |
-| `400`  | Malformed JSON.                                                                                 |
-| `401`  | Missing/expired session or invalid login.                                                       |
-| `403`  | Invalid CSRF/origin, or insufficient role/ownership.                                            |
-| `404`  | Unknown record/endpoint, including the production demo-role endpoint.                           |
-| `409`  | Stale content revision, invalid workflow state, missing current approval, or duplicate account. |
-| `413`  | Request body exceeds the size limit.                                                            |
-| `422`  | Invalid input, missing feedback/content, or invalid scheduling time.                            |
-| `429`  | Sign-in attempt limit. A `Retry-After` header is supplied for a timed limit.                    |
-| `500`  | Unexpected failure. Responses do not disclose database details or credentials.                  |
+The manager must choose those values for the actual video; they are not inferred.
 
-## Persistence and migrations
+## Notifications
 
-Schema migrations are ordered SQL files under `server/migrations/`. Applied
-versions are recorded in `schema_migrations`. SQLite uses foreign keys, WAL
-mode, a busy timeout, and transactions for content decisions and audit writes.
+| Method and route                       | Body                      | Result                                                                                    |
+| -------------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------- |
+| `GET /api/notifications`               | None                      | `{notifications,unreadCount,preferences}`; latest 100 notifications for the current user. |
+| `POST /api/notifications/:id/read`     | `{}`                      | Mark that user’s notification read.                                                       |
+| `POST /api/notifications/read-all`     | `{}`                      | Mark current notifications read through the server timestamp.                             |
+| `PATCH /api/notifications/preferences` | Partial `{sound,desktop}` | `{preferences}`; persisted per user.                                                      |
 
-`post_revisions` preserves the exact saved content of each revision. `audit_log`
-preserves actor, action, entity, time and a human-readable decision note. Passwords,
-session cookies, CSRF tokens and provider secrets are never included in audit
-details. This application currently stores no provider secrets at all.
+Review decisions, comments, content/publication changes, document/task updates
+and selected research/connection failures create durable inbox entries in the
+same transaction as their audit event. Recipients depend on the event:
+managers, the post owner/comment participants, task assignees or the active team.
+The actor does not receive their own notification.
 
-Run only one application instance against a local database file for this first
-release. Keep the database on durable storage and restrict filesystem access.
-Use a SQLite-aware backup process, or stop the service before taking a file
-backup; copying only the database file while WAL writes are active can miss
-recent transactions. Deployment on an ephemeral serverless filesystem will
-not provide durable collaboration.
+Sound and browser desktop preferences default off. The frontend polls while
+open; browser permission/user interaction is needed for desktop alerts and
+sound. This is not an email/SMS service or a service-worker push system that
+guarantees alerts after the application closes.
 
-## Verification
+## Shared resources and documents
 
-Run:
+Each collection below supports `POST /api/<collection>`,
+`PATCH /api/<collection>/:id` and `DELETE /api/<collection>/:id`.
+Authenticated members can collaborate; mutations are audited.
 
-```sh
-node --test server/app.test.mjs
+| Collection    | Writable fields                                     | Notes                                                                                       |
+| ------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `sources`     | `name,url,category,status`                          | Create/update status is `manual` or `paused`; actual watches establish monitored readiness. |
+| `competitors` | `name,platform,url,category,notes,monitoringStatus` | Platform includes `website`. A bookmark alone starts no monitoring.                         |
+| `tasks`       | `title,owner,dueDate,status,priority`               | Real YYYY-MM-DD due date; status `todo/in_progress/done`.                                   |
+| `documents`   | `title,category,content`                            | At most 100,000 content characters; PATCH also requires `expectedVersion`.                  |
+
+Document content accepts legacy text/Markdown or a JSON string with this
+validated block structure:
+
+```json
+{
+  "schema": "stmarys.blocks",
+  "version": 1,
+  "blocks": [
+    { "id": "intro", "type": "heading", "text": "Admissions campaign" },
+    { "id": "review", "type": "checklist", "text": "Review the source", "checked": false }
+  ]
+}
 ```
 
-The integration suite uses real HTTP requests and temporary/in-memory SQLite
-databases. It verifies:
+Supported types: `paragraph`, `heading`, `bullet`, `checklist`, `quote`.
+There are at most 100 blocks, unique block IDs and 10,000 text characters per
+block. Content is plain data, not executable/trusted HTML.
 
-- Explicit demo/production separation and absence of production sample metrics.
-- Password login, protected cookies and independent team-member sessions.
-- CSRF and origin enforcement, plus revoked tokens after demo role switching.
-- Server-side contributor ownership and review restrictions.
-- Revision-bound approvals, invalidation on edit and rejection of stale writes.
-- Future-only scheduling that never claims external publication.
-- Reviewer feedback and resubmission.
-- Manual production research briefs, with separate manager verification.
-- Preserved source provenance and duplicate-safe opportunity-to-draft conversion.
-- URL/date validation and partial workspace updates.
-- Database/session/audit persistence without re-seeding on restart.
+A document entity has its own increasing `version`, separate from the block
+format’s version. PATCH must send that entity’s current `expectedVersion`.
+Conflicts return 409 `stale_document`; clients must review the latest version
+before retrying. `GET /api/documents/:id/history` returns `{revisions}` with up to
+50 saved snapshots. This implements safe whole-document saves and history, not
+simultaneous character-level collaboration or Notion database relations.
 
-# Version 0.2 additions
+## Research briefs
 
-The authenticated bootstrap response now includes `teamUsers` (manager only), `providerSetup`, `connections`, `mediaAssets`, `publicationJobs`, `websiteAnalytics`, `evaluationMode` and `storage: { driver, persistent }`. Provider application secrets and account tokens never appear in these responses.
+| Method and route                    | Body                                                                                    | Result                                             |
+| ----------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `POST /api/opportunities`           | `{title,summary,source,sourceUrl,category,publishedAt?,audience,contentAngle,priority}` | Unverified brief with provenance.                  |
+| `PATCH /api/opportunities/:id`      | Supported status/verification changes                                                   | Managers alone can mark evidence verified.         |
+| `POST /api/opportunities/:id/draft` | Empty                                                                                   | Duplicate-safe deterministic draft from the brief. |
 
-| Endpoint                                   | Purpose                                                                            |
-| ------------------------------------------ | ---------------------------------------------------------------------------------- |
-| `POST /api/auth/setup`                     | Redeem a personal, expiring, single-use setup/recovery token and choose a password |
-| `POST /api/auth/password`                  | Change password after verifying the current password; rotate sessions              |
-| `PATCH /api/users/:id`                     | Manager-controlled name, role and active status                                    |
-| `POST /api/users/:id/setup-link`           | Issue a replacement setup/recovery link; does not send email                       |
-| `GET/POST /api/posts/:id/comments`         | Read or add revision-linked review discussion                                      |
-| `GET /api/posts/:id/history`               | Saved revision snapshots and changes                                               |
-| `POST /api/posts/:id/duplicate`            | Create a new unapproved draft                                                      |
-| `GET /api/connections`                     | Provider setup requirements and authorized account states                          |
-| `PUT /api/connections/providers/:provider` | Encrypt manager-provided Google or Meta application credentials                    |
-| `POST /api/connections/authorize`          | Start session-bound OAuth authorization                                            |
-| `GET /api/connections/:id/accounts`        | Discover accessible GA4 properties or eligible Instagram accounts                  |
-| `POST /api/connections/:id/select`         | Map the exact account/property to its institution                                  |
-| `POST /api/connections/:id/test`           | Check provider access without publishing                                           |
-| `POST /api/connections/:id/sync`           | Import GA4 reports for an explicit date range                                      |
-| `DELETE /api/connections/:id`              | Disconnect an account, subject to in-flight publication safeguards                 |
-| `GET/POST /api/media`                      | List authorized media or upload raw image bytes, at most 3 MiB                     |
-| `GET /api/media/:id/content`               | Authenticated private image retrieval                                              |
-| `POST /api/posts/:id/publications`         | Ensure durable jobs for the exact approved revision and destinations               |
-| `POST /api/publications/:id/retry`         | Retry an eligible, unambiguous failure/cancellation                                |
-| `POST /api/publications/:id/cancel`        | Cancel a job that has not been sent                                                |
-| `POST /api/publications/:id/reconcile`     | Verify a remotely published media ID after an ambiguous send                       |
-| `POST /api/jobs/run`                       | Manager-triggered processing of one due job                                        |
-| `GET /api/jobs/run`                        | Same bounded worker, authenticated by the server-only cron secret                  |
+Categories are `Exam update`, `Board update`, `Medical seats`, `Competitor`
+and `Content idea`. Priority is `high`, `medium` or `low`. Recording a URL or
+detecting a new link does not verify its claims. The draft builder does not call
+an AI service. A later brief/source change does not silently rewrite an existing
+draft or reapprove it.
 
-Manager approval automatically creates jobs when an approved revision has real publishing destinations. A local content plan without a destination does not send anything. Content edits revoke approval and cancel eligible pending jobs. The server prevents edits during an active or ambiguous send. See [the provider contract](../server/extensions/FRONTEND-CONTRACT.md) for exact payloads and [adapter operations](../server/extensions/README.md) for prerequisites and failure handling.
+## Intelligence: sources, competitors, SEO and AEO/GEO
+
+`GET /api/intelligence` returns:
+`{watches,notices,sourceCatalog,siteVerifications,seoAudits,answerPrompts,answerObservations,automation}`.
+The same object is included in bootstrap.
+
+### Watch and notice routes
+
+| Method and route                            | Body                                                           | Result / access                                                          |
+| ------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `GET /api/intelligence/watches`             | None                                                           | `{watches}`.                                                             |
+| `POST /api/intelligence/watches`            | `{kind,resourceId,mode,url?,keywords?,intervalHours?,active?}` | `{watch}`; manager.                                                      |
+| `PATCH /api/intelligence/watches/:id`       | Partial `{url,keywords,intervalHours,active}`                  | Updated watch; manager.                                                  |
+| `DELETE /api/intelligence/watches/:id`      | None                                                           | Remove watch/notices; created briefs/posts remain; manager.              |
+| `POST /api/intelligence/watches/:id/run`    | Empty                                                          | Check one watch; manager. Includes added/updated/baseline/skipped state. |
+| `POST /api/intelligence/run`                | Empty                                                          | Bounded due sweep; manager.                                              |
+| `POST /api/intelligence/catalog/:id`        | Empty                                                          | Idempotently add the catalog source and watch; manager.                  |
+| `GET /api/intelligence/notices`             | None                                                           | Latest notice inbox.                                                     |
+| `PATCH /api/intelligence/notices/:id`       | `{status:"new"\|"saved"\|"dismissed"}`                         | Update inbox state.                                                      |
+| `GET /api/intelligence/notices/:id/history` | None                                                           | Retained detected metadata revisions.                                    |
+| `POST /api/intelligence/notices/:id/brief`  | Optional `{audience,contentAngle,priority}`                    | `{opportunity}`; duplicate-safe, initially unverified.                   |
+
+`kind` is `source` or `competitor`; `resourceId` refers to its existing bookmark.
+`mode` is `rss`, `html` or `youtube`. YouTube requires a channel ID or
+`/channel/` URL; handles alone are not resolved.
+
+Watches accept public HTTPS pages/feeds, 6–168 hour intervals and keyword filters.
+Limits are 50 watches, 80 matching entries per scan and two due watches per
+scheduled invocation. The first successful scan is a baseline, including after
+an earlier failure. Detected time and publisher time remain distinct.
+Title/link/excerpt changes create history and clear linked brief verification.
+HTML monitoring does not parse PDF contents or detect every same-URL PDF rewrite.
+
+Network reads enforce private-network/DNS/redirect protection, pinned checked
+addresses, robots rules, timeouts and bounded responses. Durable claims fence
+stale workers; errors preserve previous results and back off. Instagram,
+Facebook and LinkedIn arbitrary competitor-profile scraping is not implemented.
+Their saved profiles remain manual unless an explicitly supported public feed
+is used. No private competitor reach, ad spend or lead data is invented.
+
+### SEO routes
+
+| Method and route                          | Body     | Result / access                                     |
+| ----------------------------------------- | -------- | --------------------------------------------------- |
+| `GET /api/intelligence/sites`             | None     | `{sites,audits}`.                                   |
+| `POST /api/intelligence/sites`            | `{url}`  | Register exact HTTPS origin and challenge; manager. |
+| `POST /api/intelligence/sites/:id/verify` | Empty    | Verify ownership; manager.                          |
+| `POST /api/intelligence/sites/:id/audit`  | `{url?}` | `{audit}`; same verified origin, manager.           |
+| `DELETE /api/intelligence/sites/:id`      | None     | Remove registration; manager.                       |
+
+Ownership uses the supplied token in the exact
+`/.well-known/stmarys-marketing-verification.txt` file or an actual homepage-head
+`stmarys-marketing-verification` meta tag. Verification expires after 30 days.
+The audit checks fetched HTML metadata, headings, canonical URLs, language,
+images, links, robots declarations and JSON-LD. It is a single-page check with
+stored evidence, not a rendered-browser crawl, Core Web Vitals test, indexing
+guarantee or fabricated SEO score. Search Console reporting is a separate
+authorized provider connection.
+
+### AEO/GEO routes
+
+| Method and route                                   | Purpose                                                             |
+| -------------------------------------------------- | ------------------------------------------------------------------- |
+| `GET/POST /api/intelligence/answer-prompts`        | Read/create reproducible test prompts.                              |
+| `PATCH /api/intelligence/answer-prompts/:id`       | Edit prompt, intent, institution, language, locale and target URL.  |
+| `DELETE /api/intelligence/answer-prompts/:id`      | Remove prompt; manager.                                             |
+| `GET/POST /api/intelligence/answer-observations`   | Read/store dated provider/model results with excerpts and evidence. |
+| `DELETE /api/intelligence/answer-observations/:id` | Remove observation; manager.                                        |
+
+Observations include the prompt snapshot, date, language/location context,
+provider/model, whether the institution was mentioned, citation URLs and an
+evidence URL. A claimed target citation must match the target website.
+These are manually recorded observations; this release neither calls AI search
+providers on a schedule nor claims a universal GEO ranking.
+
+## Provider connections and reports
+
+Supported provider IDs:
+
+| ID                | Reporting                                            | Implemented publication                          |
+| ----------------- | ---------------------------------------------------- | ------------------------------------------------ |
+| `google`          | GA4 property traffic, acquisition, pages, key events | None                                             |
+| `search_console`  | Search clicks, impressions, queries and pages        | None                                             |
+| `youtube`         | Authorized channel analytics                         | One MP4 in Video format                          |
+| `google_business` | Selected location performance                        | Text or one image, Post format                   |
+| `google_ads`      | Account/campaign reporting                           | None; read-only                                  |
+| `instagram`       | Professional-account insights                        | One image, 2–10 image carousel, or one Reel      |
+| `facebook`        | Page/post metrics                                    | Page text or one image, Post format              |
+| `meta_ads`        | Ad-account/campaign reporting                        | None; read-only                                  |
+| `linkedin`        | Organization statistics, subject to access           | Organization text or one image, Post format      |
+| `linkedin_member` | Not included                                         | Authorized member text or one image, Post format |
+
+There are no campaign-creation, budget-change or ad-spend endpoints.
+App credentials can be shared by a provider family, but each service requests its
+own authorization scopes. Provider review, access grants and quotas still apply.
+
+| Method and route                                | Body / result                                                                                       | Access                  |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------- |
+| `GET /api/connections`                          | `{providers,connections}`                                                                           | Authenticated           |
+| `PUT /api/connections/providers/:provider`      | Provider application configuration, including `clientId/clientSecret` and supported provider fields | Manager                 |
+| `POST /api/connections/authorize`               | `{provider,institution}` → authorization URL                                                        | Manager                 |
+| `GET /api/connections/oauth/:provider/callback` | OAuth callback with bound, expiring state                                                           | Session/state validated |
+| `GET /api/connections/:id/accounts`             | Discover accessible accounts/properties/locations                                                   | Manager                 |
+| `POST /api/connections/:id/select`              | `{accountId}` → exact institution mapping                                                           | Manager                 |
+| `POST /api/connections/:id/test`                | Check permission without publishing                                                                 | Manager                 |
+| `POST /api/connections/:id/sync`                | Optional `{startDate,endDate}` → stored report                                                      | Manager                 |
+| `POST /api/connections/:id/sync-settings`       | `{autoSync,syncIntervalHours?}` → updated Connection                                                | Manager                 |
+| `GET /api/connections/:id/report.csv`           | Export last imported report                                                                         | Authenticated           |
+| `DELETE /api/connections/:id`                   | Disconnect; in-flight send safeguards apply                                                         | Manager                 |
+
+Connection states include `awaiting_selection`, `connected`,
+`needs_attention` and `disconnected`. An account selection cannot silently
+retarget an existing approved destination to a different account.
+
+Manual report imports accept at most 90 inclusive dates, with stricter provider
+limits where necessary. Default manual dates are the 30 dates ending UTC
+yesterday. Always use explicit dates when comparing with a provider dashboard.
+Reports preserve provider/account, date range, import time, currency/timezone
+where returned and metric definitions. Missing data is not presented as zero.
+Unique-user/reach totals are not calculated by summing overlapping daily or
+campaign counts.
+
+Automatic importing defaults **off**, interval 24 hours. Enabling it requires a
+healthy analytics-capable connection; intervals may be 6–168 hours. Each scheduled
+run handles at most one due account using the same five-minute lease as manual
+imports. The automatic window is 28 inclusive calendar dates ending two UTC
+dates before the run. This two-day lag avoids importing an unfinished local day;
+providers may still revise attribution or delayed data.
+
+The connection exposes `autoSync`, `syncIntervalHours`, `nextSyncAt`,
+`lastSyncAt` and `error`. Transient failures retain connected status and retry at
+the configured interval. Permission/expired-auth failures require testing or
+reauthorization. The latest successful report remains available after failure.
+Scheduled failures notify managers.
+
+## Private media
+
+| Method and route                       | Body / result                                                                                                  |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `GET /api/media`                       | Visible assets and image upload configuration.                                                                 |
+| `POST /api/media`                      | Raw JPEG/PNG/WebP bytes, at most 3 MiB; appropriate Content-Type and URL-encoded `x-file-name`; returns asset. |
+| `GET /api/media/:id/content`           | Authenticated, authorized private content retrieval.                                                           |
+| `POST /api/media/uploads`              | `{name,mimeType:"video/mp4",size}` → upload ID, signed PUT URL, headers and expiry.                            |
+| `PUT /api/media/uploads/:id/content`   | Local development upload fallback; unavailable on Vercel.                                                      |
+| `POST /api/media/uploads/:id/complete` | `{}` → validated immutable video asset; repeated completed call is idempotent.                                 |
+
+Images are decoded, normalized to JPEG and stripped of metadata before preview
+and approval. Transparency becomes white. Approved bytes are immutable.
+
+Videos use direct signed uploads to configured private storage, avoiding a large
+Vercel request body. MP4 files are limited to 40 MiB and ten minutes, H.264 video
+with optional supported AAC audio. Validation checks file structure and declared
+tracks; it is not a transcoder or a full decode of every frame. Provider-specific
+restrictions still apply: the Instagram adapter requires a 9:16 Reel, at least
+320 pixels wide and 3–600 seconds long.
+
+Direct-upload completion verifies the actual byte count, format and hash before
+an asset becomes attachable. Pending uploads expire after two hours. Full
+40 MiB reservations remain against the shared 200-asset/512 MiB allowance until
+completion or confirmed expired-object cleanup. Completion claims prevent
+duplicate validation races. A member may prepare at most 20 video uploads per
+24-hour period.
+
+The server keeps storage credentials private. Temporary media delivery URLs are
+created only for provider delivery; the normal media library remains behind
+workspace authorization. Local filesystem media is a development option.
+Hosted video requires the configured private storage broker.
+
+## Publication jobs and background workers
+
+| Method and route                       | Body / result                                                        | Access      |
+| -------------------------------------- | -------------------------------------------------------------------- | ----------- |
+| `POST /api/posts/:id/publications`     | `{revision,scheduledAt?}` → `{jobs}` for exact approved destinations | Manager     |
+| `POST /api/publications/:id/retry`     | Retry eligible unambiguous failure/cancellation                      | Manager     |
+| `POST /api/publications/:id/cancel`    | Cancel an unsent eligible job                                        | Manager     |
+| `POST /api/publications/:id/reconcile` | `{remoteId}`; verify a suspected remote result                       | Manager     |
+| `POST /api/jobs/run`                   | Process one due publication job                                      | Manager     |
+| `GET /api/jobs/run`                    | Same publication worker                                              | Cron secret |
+| `GET /api/intelligence/cron`           | Up to two due watches and bounded expired-upload cleanup             | Cron secret |
+| `GET /api/reports/cron`                | Up to one due account report                                         | Cron secret |
+
+Cron authentication is `Authorization: Bearer <CRON_SECRET>`.
+`vercel.json` requests publication checks every five minutes and intelligence/
+report checks every fifteen minutes. Deployment-plan scheduling support, worker
+duration and queue backlog affect actual execution time; these are bounded
+workers, not exact-time delivery guarantees.
+
+Job states are `queued`, `processing`, `published`, `failed`,
+`needs_reconciliation` and `cancelled`. Jobs retain the exact approved content
+snapshot, account and media hashes. Workers recheck approval, account and format
+before sending. Provider confirmation is required before recording success.
+An ambiguous send is not blindly retried: a manager must inspect/reconcile it.
+Read-back limitations for a provider are shown rather than bypassed.
+
+## Errors and verification
+
+Errors return `{error,code}` with a safe user-facing message. Common statuses:
+400 malformed JSON/setup token; 401 missing session/cron credential;
+403 role/ownership/CSRF/origin; 404 missing record;
+409 stale revision/document, conflicting lease/state or required reconnection;
+413 oversized body; 422 invalid fields/unsupported format;
+429 rate limit/cooldown; 503 missing configuration.
+
+Core audit events and related notifications are durable. Migrations preserve
+existing drafts and approvals; new source detection does not auto-publish.
+Application integration tests use temporary databases and controlled provider
+responses. They validate auth, approval/content hashes, durable jobs, report
+semantics, concurrency, media, SSRF protection and source provenance. A passing
+test suite does not establish authorization to a real provider.
+
+```sh
+npm test
+npm run check
+npm run build
+```
+
+Production acceptance still requires connecting the school’s actual accounts,
+reconciling imported metrics against the same provider/date range and explicitly
+approving controlled test publications. See [the roadmap](ROADMAP.md).

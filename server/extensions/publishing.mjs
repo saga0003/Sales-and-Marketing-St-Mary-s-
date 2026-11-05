@@ -2,6 +2,7 @@ import { transaction, getPost, audit } from '../database.mjs';
 import { HttpError } from '../validation.mjs';
 import { hash, opaqueId } from './crypto.mjs';
 import { ProviderError } from './providers.mjs';
+import { PROVIDERS, platformFor } from './provider-definitions.mjs';
 
 export function publicJob(row) {
   return {
@@ -10,30 +11,58 @@ export function publicJob(row) {
     revision: Number(row.revision),
     connectionId: row.connection_id,
     accountName: row.account_name,
-    platform: 'instagram',
+    platform: JSON.parse(row.approved_payload).platform || 'instagram',
     status: row.status,
     scheduledAt: row.scheduled_at,
     attempts: Number(row.attempts),
     error: row.error,
     remoteId: row.remote_id,
     remoteUrl: row.remote_url,
+    remoteVisibility: row.remote_visibility ?? null,
+    providerStatus: row.provider_status ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-function payloadFor(post, connection, asset) {
+function payloadFor(post, connection, assets, legacy = false) {
+  if (legacy)
+    return {
+      postId: post.id,
+      revision: post.revision,
+      caption: post.caption,
+      format: post.format,
+      institution: post.institution,
+      platform: 'instagram',
+      connectionId: connection.id,
+      accountId: connection.account_id,
+      assetId: assets[0]?.id,
+      assetHash: assets[0]?.sha256,
+      approvedBy: post.approvedBy,
+      approvedAt: post.approvedAt,
+    };
   return {
+    version: 2,
     postId: post.id,
     revision: post.revision,
+    title: post.title,
     caption: post.caption,
     format: post.format,
     institution: post.institution,
-    platform: 'instagram',
+    platform: platformFor(connection.provider),
+    provider: connection.provider,
     connectionId: connection.id,
     accountId: connection.account_id,
-    assetId: asset.id,
-    assetHash: asset.sha256,
+    assets: assets.map((asset) => ({
+      id: asset.id,
+      sha256: asset.sha256,
+      mimeType: asset.mime_type,
+      width: Number(asset.width),
+      height: Number(asset.height),
+      duration:
+        asset.duration === null || asset.duration === undefined ? null : Number(asset.duration),
+    })),
+    publicationOptions: post.publicationOptions ?? {},
     approvedBy: post.approvedBy,
     approvedAt: post.approvedAt,
   };
@@ -71,67 +100,178 @@ export function createPublishing({
         'publication_locked',
       );
   }
+  const postAssetIds = (post) =>
+    post.assetIds?.length ? post.assetIds : post.assetId ? [post.assetId] : [];
+  async function postAssets(post) {
+    const result = [];
+    for (const id of postAssetIds(post)) {
+      const asset = await db.prepare('SELECT * FROM media_assets WHERE id = ?').get(id);
+      if (!asset)
+        throw new HttpError(
+          422,
+          'A selected media asset is unavailable. Upload it again and obtain approval.',
+          'asset_required',
+        );
+      result.push(asset);
+    }
+    return result;
+  }
   async function validateDestinations(post, strict = false) {
     const ids = post.destinationIds ?? [];
     if (!ids.length) return [];
-    const asset = post.assetId
-      ? await db.prepare('SELECT * FROM media_assets WHERE id = ?').get(post.assetId)
-      : null;
-    if (strict && !asset)
-      throw new HttpError(
-        422,
-        'Upload and select the exact image to be approved for publication.',
-        'asset_required',
-      );
-    if (post.assetId && !asset)
-      throw new HttpError(422, 'The selected image is unavailable.', 'asset_required');
-    if (strict && (post.format !== 'Post' || !post.platforms.includes('instagram')))
-      throw new HttpError(
-        422,
-        'Live Instagram publishing currently supports one image in Post format. Select Instagram as a platform.',
-        'unsupported_publish_format',
-      );
-    if (strict && (post.caption.length > 2200 || !post.caption.trim()))
-      throw new HttpError(
-        422,
-        'Instagram captions must contain between 1 and 2,200 characters.',
-        'instagram_caption_limit',
-      );
-    if (
-      strict &&
-      asset &&
-      (asset.mime_type !== 'image/jpeg' ||
-        Number(asset.width) < 320 ||
-        Number(asset.width) / Number(asset.height) < 0.8 ||
-        Number(asset.width) / Number(asset.height) > 1.91)
-    )
-      throw new HttpError(
-        422,
-        'For this Instagram adapter, use an image at least 320 pixels wide with an aspect ratio from 4:5 to 1.91:1.',
-        'instagram_image_ratio',
-      );
+    const assets = await postAssets(post);
+    const imageOnly = assets.every((asset) => asset.mime_type === 'image/jpeg');
+    const oneVideo = assets.length === 1 && assets[0].mime_type === 'video/mp4';
     const destinations = [];
     for (const id of ids) {
       const connection = await db.prepare('SELECT * FROM service_connections WHERE id = ?').get(id);
+      const capabilities = connection ? JSON.parse(connection.capabilities) : [];
       if (
         !connection ||
-        connection.provider !== 'instagram' ||
+        !PROVIDERS[connection.provider]?.capabilities.some((capability) =>
+          capability.startsWith('publish:'),
+        ) ||
         connection.institution !== post.institution ||
         !connection.account_id ||
         connection.status === 'disconnected'
       )
         throw new HttpError(
           422,
-          'Choose an Instagram account connected to the same institution as this post.',
+          'Choose a publishing account connected to the same institution as this post.',
           'invalid_destination',
         );
-      if (strict && connection.status !== 'connected')
-        throw new HttpError(
-          409,
-          'Test or reconnect the Instagram destination before approving publication.',
-          'destination_unhealthy',
-        );
-      destinations.push({ connection, asset });
+      if (strict) {
+        if (connection.status !== 'connected')
+          throw new HttpError(
+            409,
+            'Test or reconnect the destination before approving publication.',
+            'destination_unhealthy',
+          );
+        if (!post.platforms.includes(platformFor(connection.provider)))
+          throw new HttpError(
+            422,
+            'Include every destination’s platform in the approved post.',
+            'unsupported_publish_format',
+          );
+        if (!post.caption.trim())
+          throw new HttpError(422, 'Add the exact caption to be approved.', 'caption_required');
+        const service = connection.provider;
+        let capability;
+        if (service === 'instagram') {
+          if (post.caption.length > 2200)
+            throw new HttpError(
+              422,
+              'Instagram captions must contain at most 2,200 characters.',
+              'instagram_caption_limit',
+            );
+          if (post.format === 'Post' && assets.length === 1 && imageOnly)
+            capability = 'publish:image';
+          else if (
+            post.format === 'Carousel' &&
+            assets.length >= 2 &&
+            assets.length <= 10 &&
+            imageOnly
+          )
+            capability = 'publish:carousel';
+          else if (post.format === 'Reel' && oneVideo) {
+            const video = assets[0];
+            if (
+              Number(video.duration) < 3 ||
+              Number(video.duration) > 600 ||
+              Number(video.width) < 320 ||
+              Math.abs(Number(video.width) / Number(video.height) - 9 / 16) > 0.02
+            )
+              throw new HttpError(
+                422,
+                'For this Instagram Reel adapter, use a 9:16 MP4 at least 320 pixels wide and 3–600 seconds long.',
+                'instagram_video_format',
+              );
+            capability = 'publish:video';
+          } else
+            throw new HttpError(
+              422,
+              'Instagram supports one image in Post format, 2–10 images in Carousel format, or one MP4 in Reel format.',
+              'unsupported_publish_format',
+            );
+          if (
+            imageOnly &&
+            assets.some(
+              (asset) =>
+                Number(asset.width) < 320 ||
+                Number(asset.width) / Number(asset.height) < 0.8 ||
+                Number(asset.width) / Number(asset.height) > 1.91,
+            )
+          )
+            throw new HttpError(
+              422,
+              'Instagram images must be at least 320 pixels wide with a ratio from 4:5 to 1.91:1. Use a consistent ratio for carousel images.',
+              'instagram_image_ratio',
+            );
+          if (
+            post.format === 'Carousel' &&
+            assets.some(
+              (asset) =>
+                Math.abs(
+                  Number(asset.width) / Number(asset.height) -
+                    Number(assets[0].width) / Number(assets[0].height),
+                ) > 0.01,
+            )
+          )
+            throw new HttpError(
+              422,
+              'Use the same aspect ratio for all approved carousel images so they are not cropped differently on Instagram.',
+              'instagram_carousel_ratio',
+            );
+        } else if (service === 'youtube') {
+          if (post.format !== 'Video' || !oneVideo)
+            throw new HttpError(
+              422,
+              'YouTube uploads require Video format with one validated MP4.',
+              'unsupported_publish_format',
+            );
+          const options = post.publicationOptions ?? {};
+          if (
+            !['private', 'unlisted', 'public'].includes(options.youtubePrivacy) ||
+            typeof options.madeForKids !== 'boolean' ||
+            typeof options.containsSyntheticMedia !== 'boolean'
+          )
+            throw new HttpError(
+              422,
+              'Choose YouTube visibility, the made-for-kids audience setting and the altered/synthetic-content declaration before approval.',
+              'youtube_options_required',
+            );
+          if (post.title.length > 100 || /[<>]/.test(post.title) || post.caption.length > 5000)
+            throw new HttpError(
+              422,
+              'YouTube titles must be at most 100 characters without angle brackets; descriptions at most 5,000 characters.',
+              'youtube_text_limit',
+            );
+          capability = 'publish:video';
+        } else {
+          if (post.format !== 'Post' || assets.length > 1 || !imageOnly)
+            throw new HttpError(
+              422,
+              'This destination supports Post format with text and, optionally, one image.',
+              'unsupported_publish_format',
+            );
+          const limit =
+            service === 'google_business' ? 1500 : service.startsWith('linkedin') ? 3000 : 5000;
+          if (post.caption.length > limit)
+            throw new HttpError(
+              422,
+              `This destination supports captions up to ${limit.toLocaleString('en-IN')} characters.`,
+              'provider_caption_limit',
+            );
+          capability = assets.length ? 'publish:image' : 'publish:text';
+        }
+        if (!capabilities.includes(capability))
+          throw new HttpError(
+            422,
+            'The selected authorization does not have permission for this format. Reconnect with the required access or select another account.',
+            'destination_permission',
+          );
+      }
+      destinations.push({ connection, assets });
     }
     return destinations;
   }
@@ -152,14 +292,16 @@ export function createPublishing({
     const when = scheduledAt ?? post.scheduledAt ?? stamp();
     if (!Number.isFinite(Date.parse(when)))
       throw new HttpError(422, 'Choose a valid publication time.', 'invalid_schedule');
-    for (const { connection, asset } of destinations) {
-      const payload = JSON.stringify(payloadFor(post, connection, asset));
+    for (const { connection, assets } of destinations) {
+      let payload = JSON.stringify(payloadFor(post, connection, assets));
       const existing = await db
         .prepare(
           'SELECT * FROM publication_jobs WHERE post_id = ? AND revision = ? AND connection_id = ?',
         )
         .get(post.id, post.revision, connection.id);
       if (existing) {
+        if (!JSON.parse(existing.approved_payload).version)
+          payload = JSON.stringify(payloadFor(post, connection, assets, true));
         if (existing.payload_hash !== hash(payload))
           throw new HttpError(
             409,
@@ -186,7 +328,7 @@ export function createPublishing({
           connection.id,
           connection.account_id,
           connection.account_name,
-          asset.id,
+          assets[0]?.id ?? null,
           payload,
           hash(payload),
           new Date(when).toISOString(),
@@ -217,7 +359,7 @@ export function createPublishing({
       post.revision !== Number(job.revision) ||
       post.approvedRevision !== post.revision ||
       !post.destinationIds.includes(job.connection_id) ||
-      post.assetId !== job.asset_id
+      (postAssetIds(post)[0] ?? null) !== job.asset_id
     )
       throw new HttpError(
         409,
@@ -227,14 +369,15 @@ export function createPublishing({
     const connection = await db
       .prepare(`SELECT * FROM service_connections WHERE id = ?${lock ? db.lockSuffix : ''}`)
       .get(job.connection_id);
-    const asset = await db.prepare('SELECT * FROM media_assets WHERE id = ?').get(job.asset_id);
+    const assets = await postAssets(post);
+    const legacy = !JSON.parse(job.approved_payload).version;
     if (
       !connection ||
       connection.status !== 'connected' ||
       connection.account_id !== job.account_id ||
       connection.institution !== post.institution ||
-      !asset ||
-      hash(JSON.stringify(payloadFor(post, connection, asset))) !== job.payload_hash
+      (legacy && assets.length !== 1) ||
+      hash(JSON.stringify(payloadFor(post, connection, assets, legacy))) !== job.payload_hash
     )
       throw new HttpError(
         409,
@@ -250,7 +393,9 @@ export function createPublishing({
         'The approving manager no longer has permission. Obtain a new approval.',
         'approver_unavailable',
       );
-    return { post, connection, asset };
+    // Recheck format and authorization capabilities immediately before delivery.
+    await validateDestinations({ ...post, destinationIds: [job.connection_id] }, true);
+    return { post, connection, assets };
   }
   async function setOwned(job, updates, params = []) {
     const result = await db
@@ -265,7 +410,7 @@ export function createPublishing({
         'publication_lease_lost',
       );
   }
-  async function finalize(job, remoteId, remoteUrl, actor = null) {
+  async function finalize(job, remoteId, remoteUrl, actor = null, details = {}) {
     await transaction(db, async () => {
       const post = await getPost(db, job.post_id, { lock: true });
       const current = await db
@@ -281,9 +426,16 @@ export function createPublishing({
         throw new HttpError(409, 'The publication lease changed.', 'publication_lease_lost');
       await db
         .prepare(
-          "UPDATE publication_jobs SET status = 'published', remote_id = ?, remote_url = ?, error = NULL, lease_id = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?",
+          "UPDATE publication_jobs SET status = 'published', remote_id = ?, remote_url = ?, remote_visibility = ?, provider_status = ?, error = NULL, lease_id = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?",
         )
-        .run(remoteId, remoteUrl, stamp(), job.id);
+        .run(
+          remoteId,
+          remoteUrl,
+          details.visibility ?? null,
+          details.providerStatus ?? null,
+          stamp(),
+          job.id,
+        );
       const outstanding = await db
         .prepare(
           "SELECT id FROM publication_jobs WHERE post_id = ? AND revision = ? AND status <> 'published' LIMIT 1",
@@ -302,7 +454,7 @@ export function createPublishing({
       await audit(
         db,
         actor,
-        'Instagram publication confirmed',
+        'Publication confirmed',
         job.post_id,
         `Revision ${job.revision}; destination ${job.account_name}; provider ID ${remoteId}.`,
         stamp(),
@@ -310,12 +462,30 @@ export function createPublishing({
     });
   }
   async function claim() {
-    // A crashed worker is never silently allowed to resend after media_publish.
-    await db
+    // A crashed worker never silently resends after a publication attempt.
+    const expired = await db
       .prepare(
-        "UPDATE publication_jobs SET status = CASE WHEN publish_started_at IS NULL THEN 'failed' ELSE 'needs_reconciliation' END, error = 'The worker stopped before recording completion. Inspect this job before retrying.', lease_id = NULL, lease_expires_at = NULL, updated_at = ? WHERE status = 'processing' AND lease_expires_at < ?",
+        "SELECT * FROM publication_jobs WHERE status = 'processing' AND lease_expires_at < ? LIMIT 20",
       )
-      .run(stamp(), stamp());
+      .all(stamp());
+    for (const stale of expired) {
+      await transaction(db, async () => {
+        const result = await db
+          .prepare(
+            "UPDATE publication_jobs SET status = CASE WHEN publish_started_at IS NULL THEN 'failed' ELSE 'needs_reconciliation' END, error = 'The worker stopped before recording completion. Inspect this job before retrying.', lease_id = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ? AND status = 'processing' AND lease_expires_at < ?",
+          )
+          .run(stamp(), stale.id, stamp());
+        if (result.changes === 1)
+          await audit(
+            db,
+            null,
+            stale.publish_started_at ? 'Publication needs reconciliation' : 'Publication failed',
+            stale.post_id,
+            `Revision ${stale.revision}; destination ${stale.account_name}; worker completion was not confirmed.`,
+            stamp(),
+          );
+      });
+    }
     const next = await db
       .prepare(
         "SELECT * FROM publication_jobs WHERE status = 'queued' AND scheduled_at <= ? ORDER BY scheduled_at, created_at LIMIT 1",
@@ -380,25 +550,68 @@ export function createPublishing({
     let publishedId = null;
     let publishingStarted = false;
     try {
-      const { post, connection, asset } = await preflight(job);
+      const { post, connection, assets } = await preflight(job);
+      const service = connection.provider;
       const current = await loadConnectionCredentials(connection);
-      const credentials = await connectionSettings('instagram');
-      await storage.read(asset); // Full byte hash check before issuing delivery URL.
-      let containerId = job.container_id;
-      if (!containerId) {
-        containerId = await provider.createContainer(
-          connection.account_id,
-          current,
-          credentials,
-          post.caption,
-          await storage.signedUrl(asset),
-        );
-        await setOwned(job, 'container_id = ?', [containerId]);
+      const credentials = await connectionSettings(service);
+      const media = [];
+      for (const asset of assets) {
+        const bytes = await storage.read(asset); // The immutable hash is checked before any provider write.
+        media.push({
+          asset,
+          bytes,
+          url: ['instagram', 'facebook', 'google_business'].includes(service)
+            ? await storage.signedUrl(asset)
+            : null,
+        });
       }
-      const state = await provider.containerStatus(containerId, current, credentials);
+      let containerId = job.container_id;
+      const needsPreparation =
+        service === 'instagram' || (service.startsWith('linkedin') && media.length > 0);
+      if (needsPreparation && !containerId) {
+        containerId = provider.preparePublication
+          ? await provider.preparePublication(
+              service,
+              connection.account_id,
+              current,
+              credentials,
+              post,
+              media,
+            )
+          : await provider.createContainer(
+              connection.account_id,
+              current,
+              credentials,
+              post.caption,
+              media[0].url,
+            );
+        await setOwned(job, 'container_id = ?', [containerId]);
+        // LinkedIn does not offer synchronous image processing. Member scopes
+        // cannot read image status, so allow a queue interval before creating a post.
+        if (service.startsWith('linkedin')) {
+          await setOwned(
+            job,
+            "status = 'queued', scheduled_at = ?, lease_id = NULL, lease_expires_at = NULL",
+            [new Date(now().getTime() + 60000).toISOString()],
+          );
+          return {
+            processed: 1,
+            jobs: [
+              publicJob(
+                await db.prepare('SELECT * FROM publication_jobs WHERE id = ?').get(job.id),
+              ),
+            ],
+          };
+        }
+      }
+      const state = needsPreparation
+        ? provider.preparedStatus
+          ? await provider.preparedStatus(service, containerId, current, credentials)
+          : await provider.containerStatus(containerId, current, credentials)
+        : 'FINISHED';
       if (state === 'PUBLISHED')
         throw new ProviderError(
-          'This container is already published. Reconcile its media ID before continuing.',
+          'This container is already published. Reconcile its remote identifier before continuing.',
           'container_already_published',
           { ambiguous: true },
         );
@@ -417,7 +630,7 @@ export function createPublishing({
       }
       if (state !== 'FINISHED')
         throw new ProviderError(
-          'Instagram could not process the approved image. Check the image and retry with a new container.',
+          'The provider could not process the approved media. Check the file and retry with a new container.',
           state === 'EXPIRED' ? 'container_expired' : 'container_failed',
         );
       await transaction(db, async () => {
@@ -425,27 +638,50 @@ export function createPublishing({
         await setOwned(job, 'publish_started_at = ?', [stamp()]);
       });
       publishingStarted = true;
-      publishedId = await provider.publish(
-        connection.account_id,
-        containerId,
-        current,
-        credentials,
-      );
-      // Persist the authoritative remote ID before an optional permalink lookup.
-      await setOwned(job, 'remote_id = ?', [publishedId]);
-      let remoteUrl = null;
-      try {
-        const media = await provider.media(
-          connection.account_id,
-          publishedId,
-          current,
-          credentials,
-        );
-        remoteUrl = validatedPermalink(media.permalink);
-      } catch {
-        /* A confirmed publish ID remains authoritative when reads lag. */
+      const result = provider.publishDirect
+        ? await provider.publishDirect(
+            service,
+            connection.account_id,
+            current,
+            credentials,
+            post,
+            media,
+            containerId,
+          )
+        : {
+            id: await provider.publish(connection.account_id, containerId, current, credentials),
+            url: null,
+          };
+      publishedId = result.id;
+      // Persist the authoritative ID before optional read-back/permalink lookup.
+      await setOwned(job, 'remote_id = ?, remote_visibility = ?, provider_status = ?', [
+        publishedId,
+        result.visibility ?? null,
+        result.providerStatus ?? null,
+      ]);
+      let remoteUrl = validatedPermalink(result.url, service);
+      let details = result;
+      if (service !== 'linkedin_member') {
+        try {
+          const remote = provider.publication
+            ? await provider.publication(
+                service,
+                connection.account_id,
+                publishedId,
+                current,
+                credentials,
+              )
+            : await provider.media(connection.account_id, publishedId, current, credentials);
+          remoteUrl = validatedPermalink(remote.permalink, service) || remoteUrl;
+          details = {
+            visibility: remote.visibility ?? result.visibility,
+            providerStatus: remote.providerStatus ?? result.providerStatus,
+          };
+        } catch {
+          /* A provider-confirmed ID remains authoritative when read access lags. */
+        }
       }
-      await finalize(job, publishedId, remoteUrl);
+      await finalize(job, publishedId, remoteUrl, null, details);
     } catch (error) {
       const ambiguous = Boolean(
         publishedId ||
@@ -456,7 +692,7 @@ export function createPublishing({
         error instanceof HttpError || error instanceof ProviderError
           ? error.message
           : 'Publication stopped unexpectedly. Inspect the job before continuing.';
-      await db
+      const stopped = await db
         .prepare(
           "UPDATE publication_jobs SET status = ?, error = ?, remote_id = COALESCE(?, remote_id), lease_id = NULL, lease_expires_at = NULL, publish_started_at = CASE WHEN ? = 'failed' THEN NULL ELSE publish_started_at END, container_id = CASE WHEN ? IN ('container_expired','container_failed') THEN NULL ELSE container_id END, updated_at = ? WHERE id = ? AND status = 'processing' AND lease_id = ?",
         )
@@ -469,6 +705,15 @@ export function createPublishing({
           stamp(),
           job.id,
           job.lease_id,
+        );
+      if (stopped.changes === 1)
+        await audit(
+          db,
+          null,
+          ambiguous ? 'Publication needs reconciliation' : 'Publication failed',
+          job.post_id,
+          `Revision ${job.revision}; destination ${job.account_name}; ${safeMessage}`,
+          stamp(),
         );
       if (error?.reauthenticate)
         await db
@@ -522,7 +767,7 @@ export function createPublishing({
       await audit(
         db,
         user,
-        action === 'retry' ? 'Publication retry queued' : 'Publication cancelled',
+        action === 'retry' ? 'Publication retried' : 'Publication cancelled',
         job.post_id,
         `Revision ${job.revision}; destination ${job.account_name}.`,
         stamp(),
@@ -536,12 +781,16 @@ export function createPublishing({
       throw new HttpError(409, 'This job does not need reconciliation.', 'invalid_state');
     const { connection } = await preflight(job);
     const current = await loadConnectionCredentials(connection);
-    const media = await provider.media(
-      connection.account_id,
-      remoteId,
-      current,
-      await connectionSettings('instagram'),
-    );
+    const credentials = await connectionSettings(connection.provider);
+    const media = provider.publication
+      ? await provider.publication(
+          connection.provider,
+          connection.account_id,
+          remoteId,
+          current,
+          credentials,
+        )
+      : await provider.media(connection.account_id, remoteId, current, credentials);
     const payload = JSON.parse(job.approved_payload);
     const timestamp = Date.parse(media.timestamp);
     const started = Date.parse(job.publish_started_at ?? job.updated_at);
@@ -550,14 +799,21 @@ export function createPublishing({
       !Number.isFinite(timestamp) ||
       timestamp < started - 5 * 60000 ||
       timestamp > started + 24 * 3600000 ||
-      (job.remote_id && job.remote_id !== String(media.id))
+      (job.remote_id && job.remote_id !== String(media.id)) ||
+      (connection.provider === 'youtube' && media.title !== payload.title)
     )
       throw new HttpError(
         422,
-        'That Instagram post does not match this approved caption and publication time.',
+        'That provider post does not match the approved account, content and publication time.',
         'reconciliation_mismatch',
       );
-    await finalize(job, String(media.id), validatedPermalink(media.permalink), user);
+    await finalize(
+      job,
+      String(media.id),
+      validatedPermalink(media.permalink, connection.provider),
+      user,
+      media,
+    );
     return publicJob(await db.prepare('SELECT * FROM publication_jobs WHERE id = ?').get(id));
   }
   return {
@@ -572,11 +828,28 @@ export function createPublishing({
   };
 }
 
-function validatedPermalink(value) {
+function validatedPermalink(value, service = 'instagram') {
   try {
     const url = new URL(value);
+    const hosts =
+      {
+        instagram: ['instagram.com', 'www.instagram.com'],
+        facebook: ['facebook.com', 'www.facebook.com'],
+        linkedin: ['linkedin.com', 'www.linkedin.com'],
+        linkedin_member: ['linkedin.com', 'www.linkedin.com'],
+        youtube: ['youtube.com', 'www.youtube.com', 'youtu.be'],
+        google_business: [
+          'google.com',
+          'www.google.com',
+          'maps.google.com',
+          'search.google.com',
+          'g.page',
+        ],
+      }[service] || [];
     return url.protocol === 'https:' &&
-      ['instagram.com', 'www.instagram.com'].includes(url.hostname)
+      !url.username &&
+      !url.password &&
+      hosts.includes(url.hostname)
       ? url.toString()
       : null;
   } catch {

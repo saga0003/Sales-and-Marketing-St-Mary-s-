@@ -48,6 +48,8 @@ import {
 } from './validation.mjs';
 import { DEMO_MANAGER_ID, DEMO_CONTRIBUTOR_ID, initializeWorkspace } from './seed.mjs';
 import { integrations, emptyAnalytics } from './catalog.mjs';
+import { notificationInbox, registerNotifications } from './notifications.mjs';
+import { registerAdvancedMedia } from './media.mjs';
 const applicationRoot = fileURLToPath(new URL('../', import.meta.url));
 const draftStates = new Set(['draft', 'changes_requested', 'rejected']);
 const reviewStates = new Set(['in_review', 'approved', 'scheduled']);
@@ -168,6 +170,8 @@ export async function createApp(options = {}) {
   // A dummy hash equalizes failed-account and failed-password verification.
   const dummyPasswordHash = hashPasswordSync(newToken());
   let extensions = {};
+  let intelligence = {};
+  let mediaMaintenance = {};
   app.use((request, response, next) => {
     response.set({
       'X-Content-Type-Options': 'nosniff',
@@ -411,42 +415,49 @@ export async function createApp(options = {}) {
     response.json({ user: session.user, csrfToken: session.csrfToken });
   });
   async function bootstrap(user, csrfToken, request) {
-    return transaction(db, async () => ({
-      user,
-      users: (await db.prepare('SELECT * FROM users WHERE active = 1 ORDER BY name').all()).map(
-        toUser,
-      ),
-      teamUsers:
-        user.role === 'manager'
-          ? (await db.prepare('SELECT * FROM users ORDER BY active DESC, name').all()).map(toUser)
-          : [],
-      demoMode: config.demoMode,
-      evaluationMode: config.evaluationMode,
-      storage: { driver: db.kind, persistent: db.persistent },
-      csrfToken,
-      posts: await listPosts(db),
-      opportunities: (
-        await db.prepare('SELECT * FROM opportunities ORDER BY published_at DESC, id ASC').all()
-      ).map(toOpportunity),
-      competitors: await listResources(db, 'competitors'),
-      sources: await listResources(db, 'sources'),
-      tasks: await listResources(db, 'tasks'),
-      documents: await listResources(db, 'documents'),
-      integrations,
-      audit: (
-        await db
-          .prepare('SELECT * FROM audit_log ORDER BY created_at DESC, id DESC LIMIT 150')
-          .all()
-      ).map(toAudit),
-      analytics: config.demoMode
-        ? JSON.parse(
-            (await db.prepare('SELECT data FROM analytics_samples WHERE id = 1').get())?.data ??
-              JSON.stringify({ ...emptyAnalytics(), sample: true }),
-          )
-        : emptyAnalytics(),
-      publishingEnabled: false,
-      ...(extensions.bootstrap ? await extensions.bootstrap(request) : {}),
-    }));
+    return transaction(db, async () => {
+      const inbox = await notificationInbox(db, user.id);
+      return {
+        user,
+        users: (await db.prepare('SELECT * FROM users WHERE active = 1 ORDER BY name').all()).map(
+          toUser,
+        ),
+        teamUsers:
+          user.role === 'manager'
+            ? (await db.prepare('SELECT * FROM users ORDER BY active DESC, name').all()).map(toUser)
+            : [],
+        demoMode: config.demoMode,
+        evaluationMode: config.evaluationMode,
+        storage: { driver: db.kind, persistent: db.persistent },
+        csrfToken,
+        posts: await listPosts(db),
+        opportunities: (
+          await db.prepare('SELECT * FROM opportunities ORDER BY published_at DESC, id ASC').all()
+        ).map(toOpportunity),
+        competitors: await listResources(db, 'competitors'),
+        sources: await listResources(db, 'sources'),
+        tasks: await listResources(db, 'tasks'),
+        documents: await listResources(db, 'documents'),
+        integrations,
+        audit: (
+          await db
+            .prepare('SELECT * FROM audit_log ORDER BY created_at DESC, id DESC LIMIT 150')
+            .all()
+        ).map(toAudit),
+        analytics: config.demoMode
+          ? JSON.parse(
+              (await db.prepare('SELECT data FROM analytics_samples WHERE id = 1').get())?.data ??
+                JSON.stringify({ ...emptyAnalytics(), sample: true }),
+            )
+          : emptyAnalytics(),
+        publishingEnabled: false,
+        notifications: inbox.notifications,
+        notificationPreferences: inbox.preferences,
+        unreadNotificationCount: inbox.unreadCount,
+        ...(extensions.bootstrap ? await extensions.bootstrap(request) : {}),
+        ...(intelligence.bootstrap ? await intelligence.bootstrap(request) : {}),
+      };
+    });
   }
   app.get('/api/bootstrap', async (request, response) => {
     if (!request.auth && config.demoMode) {
@@ -528,9 +539,12 @@ export async function createApp(options = {}) {
       sourceUrl: input.sourceUrl ?? '',
       mediaUrl: input.mediaUrl ?? '',
       assetId: input.assetId ?? null,
+      assetIds: input.assetIds ?? (input.assetId ? [input.assetId] : []),
+      publicationOptions: input.publicationOptions ?? {},
       destinationIds: input.destinationIds ?? [],
       sample: config.demoMode,
     };
+    post.assetId = post.assetIds[0] ?? null;
     await extensions.validatePost?.(post, user);
     await insertPost(db, post);
     const saved = await getPost(db, post.id);
@@ -553,12 +567,53 @@ export async function createApp(options = {}) {
           requireAuthorOrManager,
           options: options.extensionOptions ?? {},
         })) ?? {};
+      if (options.intelligence !== false) {
+        const { registerIntelligence } = await import('./intelligence/index.mjs');
+        intelligence = await registerIntelligence(app, {
+          db,
+          config,
+          now,
+          requireAuth,
+          requireManager,
+          options: options.intelligenceOptions ?? {},
+        });
+      }
     } catch (error) {
       await db.close();
       throw error;
     }
   }
+  app.get('/api/intelligence/cron', async (request, response) => {
+    const cronSecret = options.extensionOptions?.cronSecret ?? process.env.CRON_SECRET;
+    if (!cronSecret || !equalTokens(request.get('authorization'), `Bearer ${cronSecret}`))
+      throw new HttpError(401, 'A valid scheduled-job credential is required.', 'unauthenticated');
+    if (!intelligence.runDue)
+      throw new HttpError(503, 'Intelligence monitoring is unavailable.', 'monitoring_unavailable');
+    const monitoring = await intelligence.runDue({ limit: 2 });
+    let cleanup;
+    try {
+      cleanup = await mediaMaintenance.cleanupExpiredUploads?.();
+    } catch {
+      cleanup = { error: 'Abandoned-upload cleanup will be retried on the next run.' };
+    }
+    response.json({ ...monitoring, cleanup });
+  });
+  app.get('/api/reports/cron', async (request, response) => {
+    const cronSecret = options.extensionOptions?.cronSecret ?? process.env.CRON_SECRET;
+    if (!cronSecret || !equalTokens(request.get('authorization'), `Bearer ${cronSecret}`))
+      throw new HttpError(401, 'A valid scheduled-job credential is required.', 'unauthenticated');
+    if (!extensions.syncDueReports)
+      throw new HttpError(
+        503,
+        'Scheduled report imports are unavailable.',
+        'reporting_unavailable',
+      );
+    response.json(await extensions.syncDueReports({ limit: 1 }));
+  });
   app.use('/api', requireAuth);
+  registerNotifications(app, { db, now });
+  if (extensions.storage)
+    mediaMaintenance = registerAdvancedMedia(app, { db, config, now, storage: extensions.storage });
   app.post('/api/auth/logout', async (request, response) => {
     await db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(request.auth.tokenHash);
     await audit(
@@ -865,12 +920,15 @@ export async function createApp(options = {}) {
       );
       if (!changed.length) return post;
       const next = { ...post, ...changes };
+      if (Object.hasOwn(changes, 'assetIds')) next.assetId = next.assetIds[0] ?? null;
+      else if (Object.hasOwn(changes, 'assetId'))
+        next.assetIds = next.assetId ? [next.assetId] : [];
       await extensions.validatePost?.(next, user);
       const timestamp = now().toISOString();
       const result = await db
         .prepare(
           `UPDATE posts SET title = ?, caption = ?, platforms = ?, format = ?, institution = ?,
-        scheduled_at = ?, language = ?, source_url = ?, media_url = ?, palette = ?, asset_id = ?, destination_ids = ?,
+        scheduled_at = ?, language = ?, source_url = ?, media_url = ?, palette = ?, asset_id = ?, destination_ids = ?, asset_ids = ?, publication_options = ?,
         status = 'draft', revision = revision + 1, approved_revision = NULL, approved_by = NULL,
         approved_at = NULL, updated_at = ? WHERE id = ? AND revision = ?`,
         )
@@ -887,6 +945,8 @@ export async function createApp(options = {}) {
           next.palette,
           next.assetId ?? null,
           JSON.stringify(next.destinationIds ?? []),
+          JSON.stringify(next.assetIds ?? []),
+          JSON.stringify(next.publicationOptions ?? {}),
           timestamp,
           post.id,
           revision,
@@ -1077,6 +1137,8 @@ export async function createApp(options = {}) {
           sourceUrl: original.sourceUrl,
           mediaUrl: original.mediaUrl,
           assetId: original.assetId,
+          assetIds: original.assetIds,
+          publicationOptions: original.publicationOptions,
           destinationIds: original.destinationIds,
         },
         request.auth.user,
@@ -1179,6 +1241,7 @@ export async function createApp(options = {}) {
       const timestamp = now().toISOString();
       const created = await transaction(db, async () => {
         const value = await insertResource(db, table, input, timestamp);
+        if (table === 'documents') await writeDocumentVersion(value, request.auth.user.id);
         await audit(
           db,
           request.auth.user,
@@ -1192,14 +1255,27 @@ export async function createApp(options = {}) {
       response.status(201).json(created);
     });
     app.patch(`/api/${table}/:id`, async (request, response) => {
-      const input = parse(resourcePatchSchemas[table], request.body);
+      const { expectedVersion, ...input } = parse(resourcePatchSchemas[table], request.body);
       if (!Object.keys(input).length)
         throw new HttpError(422, 'Provide at least one field to update.', 'validation_error');
       const timestamp = now().toISOString();
       const updated = await transaction(db, async () => {
         const current = await getResource(db, table, request.params.id);
         if (!current) throw new HttpError(404, 'This item could not be found.', 'not_found');
+        if (table === 'documents' && current.version !== expectedVersion)
+          throw new HttpError(
+            409,
+            'This document was updated by a teammate. Open the latest version before saving your changes.',
+            'stale_document',
+          );
+        if (table === 'documents') {
+          await writeDocumentVersion(current, null);
+          await db
+            .prepare('UPDATE documents SET version = version + 1 WHERE id = ? AND version = ?')
+            .run(current.id, expectedVersion);
+        }
         const value = await updateResource(db, table, current.id, input, timestamp);
+        if (table === 'documents') await writeDocumentVersion(value, request.auth.user.id);
         await audit(
           db,
           request.auth.user,
@@ -1216,7 +1292,6 @@ export async function createApp(options = {}) {
       await transaction(db, async () => {
         const current = await getResource(db, table, request.params.id);
         if (!current) throw new HttpError(404, 'This item could not be found.', 'not_found');
-        await db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(current.id);
         await audit(
           db,
           request.auth.user,
@@ -1225,10 +1300,45 @@ export async function createApp(options = {}) {
           `${current.name ?? current.title} removed from the workspace.`,
           now().toISOString(),
         );
+        await db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(current.id);
       });
       response.json({ ok: true });
     });
   }
+  async function writeDocumentVersion(document, userId) {
+    await db
+      .prepare(
+        'INSERT INTO document_revisions(document_id,version,title,category,content,updated_at,updated_by) VALUES(?,?,?,?,?,?,?) ON CONFLICT(document_id,version) DO NOTHING',
+      )
+      .run(
+        document.id,
+        document.version,
+        document.title,
+        document.category,
+        document.content,
+        document.updatedAt,
+        userId,
+      );
+  }
+  app.get('/api/documents/:id/history', async (request, response) => {
+    if (!(await getResource(db, 'documents', request.params.id)))
+      throw new HttpError(404, 'This document was not found.', 'not_found');
+    const rows = await db
+      .prepare(
+        'SELECT document_revisions.*, users.name AS editor FROM document_revisions LEFT JOIN users ON users.id = document_revisions.updated_by WHERE document_id = ? ORDER BY version DESC LIMIT 50',
+      )
+      .all(request.params.id);
+    response.json({
+      revisions: rows.map((row) => ({
+        version: Number(row.version),
+        title: row.title,
+        category: row.category,
+        content: row.content,
+        updatedAt: row.updated_at,
+        updatedBy: row.editor ?? 'Previous version',
+      })),
+    });
+  });
   app.post('/api/opportunities', async (request, response) => {
     const input = parse(opportunityCreateSchema, request.body);
     const timestamp = now().toISOString();

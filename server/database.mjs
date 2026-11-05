@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { notificationsForAudit } from './notifications.mjs';
 const migrationsDirectory = fileURLToPath(new URL('./migrations/', import.meta.url));
 // SQL values always remain parameters. This translator only adapts the portable
 // placeholders used by this application's fixed SQL, while ignoring quoted text.
@@ -315,6 +316,12 @@ export function toPost(row) {
     sourceUrl: row.source_url,
     mediaUrl: row.media_url,
     assetId: row.asset_id ?? null,
+    assetIds: JSON.parse(row.asset_ids ?? '[]').length
+      ? JSON.parse(row.asset_ids)
+      : row.asset_id
+        ? [row.asset_id]
+        : [],
+    publicationOptions: JSON.parse(row.publication_options ?? '{}'),
     destinationIds: JSON.parse(row.destination_ids ?? '[]'),
     palette: row.palette,
     sample: Number(row.sample) === 1,
@@ -337,8 +344,8 @@ export async function insertPost(db, post) {
       `INSERT INTO posts (
     id, title, caption, platforms, format, institution, status, scheduled_at, language,
     owner_id, created_at, updated_at, revision, approved_revision, approved_by, approved_at,
-    feedback, source_url, media_url, palette, sample, asset_id, destination_ids
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    feedback, source_url, media_url, palette, sample, asset_id, destination_ids, asset_ids, publication_options
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       post.id,
@@ -364,6 +371,8 @@ export async function insertPost(db, post) {
       Number(Boolean(post.sample)),
       post.assetId ?? null,
       JSON.stringify(post.destinationIds ?? []),
+      JSON.stringify(post.assetIds ?? (post.assetId ? [post.assetId] : [])),
+      JSON.stringify(post.publicationOptions ?? {}),
     );
 }
 export async function writePostRevision(db, post, actorId, timestamp) {
@@ -374,19 +383,13 @@ export async function writePostRevision(db, post, actorId, timestamp) {
     .run(post.id, post.revision, JSON.stringify(post), actorId, timestamp);
 }
 export async function audit(db, actor, action, entityId, detail, timestamp) {
+  const id = makeId('audit');
   await db
     .prepare(
       'INSERT INTO audit_log(id, actor_id, actor, action, entity_id, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     )
-    .run(
-      makeId('audit'),
-      actor?.id ?? null,
-      actor?.name ?? 'System',
-      action,
-      entityId,
-      detail,
-      timestamp,
-    );
+    .run(id, actor?.id ?? null, actor?.name ?? 'System', action, entityId, detail, timestamp);
+  await notificationsForAudit(db, { id, actor, action, entityId, detail, timestamp });
 }
 export function toOpportunity(row) {
   if (!row) return null;
@@ -468,6 +471,7 @@ export const resourceDefinitions = {
       category: row.category,
       content: row.content,
       updatedAt: row.updated_at,
+      version: Number(row.version ?? 1),
     }),
   },
 };

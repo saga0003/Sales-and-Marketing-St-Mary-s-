@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   ArrowRight,
@@ -24,6 +24,8 @@ import { useWorkspace } from '../lib/workspace';
 import type { Task, WorkspaceDocument } from '../lib/types';
 import { Avatar, Badge, Button, Modal } from '../components/UI';
 import '../styles/workspace.css';
+import DocumentEditorModal, { DocumentContent } from '../components/DocumentEditor';
+import { documentText } from '../lib/documents';
 
 type WorkspaceTab = 'tasks' | 'knowledge';
 type TaskEditor = { item?: Task; initialStatus?: Task['status'] };
@@ -66,12 +68,16 @@ function isOverdue(task: Task) {
 }
 
 function excerpt(content: string) {
-  return content.replace(/^#+\s/gm, '').replace(/\n+/g, ' ').slice(0, 170);
+  return documentText(content).replace(/^#+\s/gm, '').replace(/\n+/g, ' ').slice(0, 170);
 }
 
 export default function Workspace() {
   const { data, mutate, toast } = useWorkspace();
-  const [tab, setTab] = useState<WorkspaceTab>('tasks');
+  const [tab, setTab] = useState<WorkspaceTab>(() =>
+    new URLSearchParams(window.location.hash.split('?')[1]).get('tab') === 'knowledge'
+      ? 'knowledge'
+      : 'tasks',
+  );
   const [query, setQuery] = useState('');
   const [taskView, setTaskView] = useState<'board' | 'list'>('board');
   const [ownerFilter, setOwnerFilter] = useState('all');
@@ -79,7 +85,28 @@ export default function Workspace() {
   const [documentCategory, setDocumentCategory] = useState('all');
   const [taskEditor, setTaskEditor] = useState<TaskEditor | null>(null);
   const [documentEditor, setDocumentEditor] = useState<DocumentEditor | null>(null);
-  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(() =>
+    new URLSearchParams(window.location.hash.split('?')[1]).get('document'),
+  );
+  const latestData = useRef(data);
+  latestData.current = data;
+  useEffect(() => {
+    const openLinkedItem = () => {
+      const query = new URLSearchParams(window.location.hash.split('?')[1]);
+      if (query.get('tab') === 'knowledge' || query.get('document')) {
+        setTab('knowledge');
+        setSelectedDocumentId(query.get('document'));
+      }
+      const task = latestData.current.tasks.find((item) => item.id === query.get('task'));
+      if (task) {
+        setTab('tasks');
+        setTaskEditor({ item: task });
+      }
+    };
+    openLinkedItem();
+    window.addEventListener('hashchange', openLinkedItem);
+    return () => window.removeEventListener('hashchange', openLinkedItem);
+  }, []);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const selectedDocument = data.documents.find((item) => item.id === selectedDocumentId);
@@ -111,7 +138,7 @@ export default function Workspace() {
     () =>
       data.documents.filter(
         (item) =>
-          `${item.title} ${item.content} ${item.category}`
+          `${item.title} ${documentText(item.content)} ${item.category}`
             .toLowerCase()
             .includes(query.toLowerCase()) &&
           (documentCategory === 'all' || (item.category || 'General') === documentCategory),
@@ -759,11 +786,14 @@ export default function Workspace() {
           <div className="work-document-reader">
             <div className="work-document-reader-meta">
               <Badge tone="violet">{selectedDocument.category || 'General'}</Badge>
-              <span>Updated {friendlyDate(selectedDocument.updatedAt, true)}</span>
+              <span>
+                Version {selectedDocument.version || 1} · Updated{' '}
+                {friendlyDate(selectedDocument.updatedAt, true)}
+              </span>
             </div>
             <h2>{selectedDocument.title}</h2>
             <div className="work-document-body">
-              {selectedDocument.content || 'This document does not have any content yet.'}
+              <DocumentContent content={selectedDocument.content} />
             </div>
             <div className="work-document-reader-footer">
               <Button
@@ -966,141 +996,6 @@ function TaskEditorModal({
               {saving ? 'Saving…' : editor.item ? 'Save changes' : 'Add task'}
             </Button>
           </div>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-function DocumentEditorModal({
-  editor,
-  categories,
-  onClose,
-  onSave,
-  onError,
-}: {
-  editor: DocumentEditor;
-  categories: string[];
-  onClose: () => void;
-  onSave: (body: unknown) => Promise<void>;
-  onError: (error: unknown) => void;
-}) {
-  const [title, setTitle] = useState(editor.item?.title || '');
-  const [category, setCategory] = useState(editor.item?.category || 'General');
-  const [content, setContent] = useState(editor.item?.content || '');
-  const [preview, setPreview] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const words = content.trim() ? content.trim().split(/\s+/).length : 0;
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (saving) return;
-    if (!title.trim()) {
-      setError('Add a title so your team can find this document.');
-      return;
-    }
-    setSaving(true);
-    setError('');
-    try {
-      await onSave({ title: title.trim(), category: category.trim() || 'General', content });
-    } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : 'Could not save your changes. Please try again.',
-      );
-      onError(caught);
-    } finally {
-      setSaving(false);
-    }
-  }
-  return (
-    <Modal
-      title={editor.item ? 'Edit document' : 'Start a new document'}
-      onClose={() => !saving && onClose()}
-      className="work-document-modal"
-    >
-      <form className="work-editor-form work-document-editor" onSubmit={submit}>
-        <label className="field">
-          <span>Title</span>
-          <input
-            className="input work-document-title-input"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            required
-            maxLength={180}
-            placeholder="Give this knowledge a name"
-            autoFocus
-          />
-        </label>
-        <label className="field">
-          <span>Category</span>
-          <input
-            className="input"
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            list="work-document-categories"
-            maxLength={80}
-            placeholder="e.g. Brand guidelines"
-          />
-          <datalist id="work-document-categories">
-            {categories.map((item) => (
-              <option key={item} value={item} />
-            ))}
-          </datalist>
-        </label>
-        <div className="work-editor-writing">
-          <div className="work-writing-toolbar">
-            <div aria-label="Document editor mode">
-              <button
-                type="button"
-                className={!preview ? 'active' : ''}
-                aria-pressed={!preview}
-                onClick={() => setPreview(false)}
-              >
-                Write
-              </button>
-              <button
-                type="button"
-                className={preview ? 'active' : ''}
-                aria-pressed={preview}
-                onClick={() => setPreview(true)}
-              >
-                Preview
-              </button>
-            </div>
-            <span>
-              {words} {words === 1 ? 'word' : 'words'}
-            </span>
-          </div>
-          {preview ? (
-            <div className="work-document-body work-writing-preview">
-              {content || 'Your document preview will appear here.'}
-            </div>
-          ) : (
-            <textarea
-              aria-label="Document content"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder="Share the guidance, process or ideas your team should know.\n\nStart with a clear purpose, then add useful details."
-              rows={13}
-              maxLength={50000}
-            />
-          )}
-          <p className="work-writing-note">
-            Plain text · Use line breaks to organize your document.
-          </p>
-        </div>
-        {error && (
-          <p className="work-form-error" role="alert">
-            {error}
-          </p>
-        )}
-        <div className="work-modal-actions">
-          <Button variant="secondary" disabled={saving} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button variant="primary" type="submit" disabled={saving}>
-            {saving ? 'Saving…' : editor.item ? 'Save changes' : 'Create document'}
-          </Button>
         </div>
       </form>
     </Modal>

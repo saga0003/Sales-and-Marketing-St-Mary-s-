@@ -6,6 +6,17 @@ import { institutions } from './types';
 import { errorMessage } from './utils';
 import { Button } from '../components/UI';
 
+export class WorkspaceRequestError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public code?: string,
+  ) {
+    super(message);
+    this.name = 'WorkspaceRequestError';
+  }
+}
+
 type ToastKind = 'success' | 'error' | 'info';
 interface WorkspaceContextValue {
   data: WorkspaceData;
@@ -88,6 +99,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       mediaAssets: result.mediaAssets || [],
       publicationJobs: result.publicationJobs || [],
       websiteAnalytics: result.websiteAnalytics || [],
+      platformAnalytics: result.platformAnalytics || [],
+      notifications: result.notifications || [],
+      unreadNotificationCount: result.unreadNotificationCount || 0,
+      notificationPreferences: result.notificationPreferences || { sound: false, desktop: false },
+      intelligence: result.intelligence || {
+        watches: [],
+        notices: [],
+        sourceCatalog: [],
+        siteVerifications: [],
+        seoAudits: [],
+        answerPrompts: [],
+        answerObservations: [],
+        automation: { enabled: false, minimumIntervalHours: 1, maxWatchesPerRun: 2 },
+      },
     });
     setNeedsLogin(false);
     setError('');
@@ -142,7 +167,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       }
       if (!response.ok) {
         if (response.status === 401) await refresh();
-        throw new Error(result.error || 'We could not save that change. Please try again.');
+        throw new WorkspaceRequestError(
+          result.error || 'We could not save that change. Please try again.',
+          response.status,
+          result.code,
+        );
       }
       return result as T;
     },

@@ -11,6 +11,7 @@ import {
 // No application user, browser, or repository receives a Supabase secret key.
 const BUCKET = 'stmarys-marketing-private';
 const MAX_BYTES = 3 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 40 * 1024 * 1024;
 const PROJECT_URL = Deno.env.get('SUPABASE_URL')!;
 const secretKeys = JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS') || '{}');
 const STORAGE_KEY = secretKeys.default || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -42,6 +43,21 @@ async function ensureBucket() {
   if (existing.ok) {
     const bucket = await existing.json();
     if (bucket.public !== false) throw new Error('bucket_not_private');
+    if (
+      bucket.file_size_limit !== MAX_VIDEO_BYTES ||
+      !bucket.allowed_mime_types?.includes('video/mp4')
+    ) {
+      const updated = await storage(`/bucket/${BUCKET}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          public: false,
+          file_size_limit: MAX_VIDEO_BYTES,
+          allowed_mime_types: ['image/jpeg', 'video/mp4'],
+        }),
+      });
+      if (!updated.ok) throw new Error('bucket_update_failed');
+    }
     return;
   }
   if (existing.status !== 404 && existing.status !== 400) throw new Error('storage_unavailable');
@@ -52,8 +68,8 @@ async function ensureBucket() {
       id: BUCKET,
       name: BUCKET,
       public: false,
-      file_size_limit: MAX_BYTES,
-      allowed_mime_types: ['image/jpeg'],
+      file_size_limit: MAX_VIDEO_BYTES,
+      allowed_mime_types: ['image/jpeg', 'video/mp4'],
     }),
   });
   if (!created.ok) throw new Error('bucket_initialization_failed');
@@ -70,12 +86,44 @@ Deno.serve(async (request: Request) => {
     const body = JSON.parse(raw);
     if (body.operation === 'init') {
       await ensureBucket();
-      return json({ ready: true, access: 'private', maxBytes: MAX_BYTES });
+      return json({
+        ready: true,
+        access: 'private',
+        maxBytes: MAX_BYTES,
+        maxVideoBytes: MAX_VIDEO_BYTES,
+      });
     }
     if (!validAssetPath(body.path)) return json({ error: 'Invalid media path.' }, 400);
     const path = body.path.split('/').map(encodeURIComponent).join('/');
+    if (body.operation === 'removeExpiredUpload') {
+      const result = await storage(`/object/${BUCKET}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefixes: [body.path] }),
+      });
+      if (!result.ok && result.status !== 404)
+        return json({ error: 'Abandoned upload cleanup failed.' }, 502);
+      return json({ removed: true });
+    }
+    if (body.operation === 'prepareVideoUpload') {
+      if (!body.path.endsWith('.mp4')) return json({ error: 'Invalid video path.' }, 400);
+      const response = await storage(`/object/upload/sign/${BUCKET}/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-upsert': 'false' },
+        body: '{}',
+      });
+      if (!response.ok) return json({ error: 'Could not prepare a private video upload.' }, 502);
+      const result = await response.json();
+      if (
+        typeof result.url !== 'string' ||
+        !result.url.startsWith(`/object/upload/sign/${BUCKET}/${path}?`)
+      )
+        return json({ error: 'Invalid upload URL.' }, 502);
+      return json({ url: `${PROJECT_URL}/storage/v1${result.url}` });
+    }
     if (body.operation === 'put') {
       if (
+        !body.path.endsWith('.jpg') ||
         body.contentType !== 'image/jpeg' ||
         typeof body.dataBase64 !== 'string' ||
         body.dataBase64.length > 4_194_304 ||
@@ -101,6 +149,8 @@ Deno.serve(async (request: Request) => {
       return json({ path: body.path });
     }
     if (body.operation === 'read') {
+      if (!body.path.endsWith('.jpg'))
+        return json({ error: 'Use a signed delivery URL for video.' }, 400);
       const response = await storage(`/object/authenticated/${BUCKET}/${path}`);
       if (!response.ok)
         return json({ error: 'Image unavailable.' }, response.status === 404 ? 404 : 502);

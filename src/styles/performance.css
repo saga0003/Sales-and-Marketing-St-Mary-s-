@@ -21,7 +21,7 @@
   margin-bottom: 22px;
 }
 .perf-sample-note p {
-  font-size: 10px;
+  font-size: var(--text-small);
   line-height: 1.6;
   color: #9680ab;
 }
@@ -32,7 +32,7 @@
   margin-left: auto;
   background: none;
   border: 0;
-  font-size: 10px;
+  font-size: var(--text-small);
   color: #8d6fb0;
   white-space: nowrap;
 }
@@ -61,13 +61,13 @@
   width: 33px;
 }
 .perf-stat > p {
-  font-size: 11px;
+  font-size: var(--text-small);
   color: #8b819a;
   margin: 4px 0 12px;
   padding-right: 25px;
 }
 .perf-stat > strong {
-  font-size: 31px;
+  font-size: 1.9375rem;
   letter-spacing: -1px;
   font-weight: 550;
   display: block;
@@ -76,7 +76,7 @@
 .perf-stat > span:last-child {
   display: block;
   color: #a79aad;
-  font-size: 9px;
+  font-size: var(--text-small);
   margin-top: 7px;
   line-height: 1.6;
 }
@@ -87,7 +87,7 @@
   background: #faf8fd;
 }
 .perf-trend-panel .tab {
-  font-size: 10px;
+  font-size: var(--text-small);
   min-height: 30px;
   padding: 5px 10px;
 }
@@ -110,7 +110,7 @@
   white-space: nowrap;
 }
 .perf-table th {
-  font-size: 10px;
+  font-size: var(--text-small);
   font-weight: 500;
   letter-spacing: 0.1px;
   color: #a598b0;
@@ -120,7 +120,7 @@
   padding: 15px 24px;
 }
 .perf-table td {
-  font-size: 12px;
+  font-size: var(--text-body);
   color: #7a6f88;
   padding: 18px 24px;
   border-bottom: 1px solid #f1edf6;
@@ -161,13 +161,13 @@
 }
 .perf-campaign-name {
   display: block;
-  font-size: 12px;
+  font-size: var(--text-body);
   font-weight: 550;
   color: #6d5d7a;
 }
 .perf-campaign-platform {
   display: block;
-  font-size: 9px;
+  font-size: var(--text-small);
   color: #b09dbc;
   margin-top: 6px;
 }
@@ -175,7 +175,7 @@
   display: flex;
   align-items: flex-start;
   gap: 9px;
-  font-size: 10px;
+  font-size: var(--text-small);
   color: #aa97b7;
   padding: 17px 24px;
   background: #fcfafe;
@@ -228,7 +228,7 @@
   margin-bottom: 27px;
 }
 .perf-search-intro h2 {
-  font-size: 33px;
+  font-size: 2.0625rem;
   font-weight: 500;
   letter-spacing: -1.1px;
   line-height: 1.35;
@@ -236,7 +236,7 @@
   margin: 16px 0;
 }
 .perf-search-intro > p {
-  font-size: 12px;
+  font-size: var(--text-body);
   line-height: 1.9;
   color: #a08aad;
   margin-bottom: 27px;
@@ -273,13 +273,13 @@
   flex: 1;
 }
 .perf-search-card h3 {
-  font-size: 14px;
+  font-size: var(--text-body);
   font-weight: 550;
   color: #7a658a;
   margin: 1px 0 6px;
 }
 .perf-search-card p {
-  font-size: 11px;
+  font-size: var(--text-small);
   color: #b19cbd;
   line-height: 1.8;
   margin-bottom: 12px;
@@ -301,13 +301,13 @@
   padding: 10px 4px;
 }
 .perf-search-task h3 {
-  font-size: 12px;
+  font-size: var(--text-body);
   font-weight: 550;
   color: #9b80ab;
   margin-bottom: 5px;
 }
 .perf-search-task p {
-  font-size: 10px;
+  font-size: var(--text-small);
   color: #b19cbd;
 }
 @media (max-width: 1050px) {
@@ -318,7 +318,7 @@
     padding: 18px;
   }
   .perf-stat > p {
-    font-size: 10px;
+    font-size: var(--text-small);
   }
   .perf-stat-icon {
     height: 27px;
@@ -327,10 +327,10 @@
     top: 14px;
   }
   .perf-stat > strong {
-    font-size: 28px;
+    font-size: 1.75rem;
   }
   .perf-stat > span:last-child {
-    font-size: 8px;
+    font-size: var(--text-small);
   }
   .perf-trend-panel .panel-heading {
     flex-wrap: wrap;
@@ -343,7 +343,7 @@
     padding: 30px;
   }
   .perf-search-intro h2 {
-    font-size: 29px;
+    font-size: 1.8125rem;
   }
   .perf-search-card {
     padding: 21px;
@@ -352,10 +352,10 @@
     flex-wrap: wrap;
   }
   .perf-sample-note button {
-    font-size: 9px;
+    font-size: var(--text-small);
   }
   .perf-sample-note p {
-    font-size: 9px;
+    font-size: var(--text-small);
   }
 }
 @media (max-width: 720px) {
@@ -367,7 +367,7 @@
     min-height: 145px;
   }
   .perf-stat > p {
-    font-size: 10px;
+    font-size: var(--text-small);
     max-width: 120px;
     margin-top: 25px;
     padding: 0;
@@ -382,10 +382,10 @@
     height: 14px;
   }
   .perf-stat > strong {
-    font-size: 29px;
+    font-size: 1.8125rem;
   }
   .perf-stat > span:last-child {
-    font-size: 9px;
+    font-size: var(--text-small);
   }
   .perf-sample-note {
     align-items: flex-start;
@@ -393,13 +393,13 @@
     padding: 12px;
   }
   .perf-sample-note p {
-    font-size: 10px;
+    font-size: var(--text-small);
     max-width: 85%;
   }
   .perf-sample-note button {
     margin-left: 23px;
     min-height: 25px;
-    font-size: 10px;
+    font-size: var(--text-small);
   }
   .perf-large-chart {
     padding: 5px 12px 15px;
@@ -411,14 +411,14 @@
     margin-top: 1px;
   }
   .perf-trend-panel .tab {
-    font-size: 10px;
+    font-size: var(--text-small);
   }
   .perf-table th,
   .perf-table td {
     padding: 14px 18px;
   }
   .perf-table td {
-    font-size: 11px;
+    font-size: var(--text-small);
   }
   .perf-three-stats .perf-stat:last-child {
     grid-column: 1/-1;
@@ -448,7 +448,7 @@
     padding: 30px;
   }
   .perf-search-intro h2 {
-    font-size: 31px;
+    font-size: 1.9375rem;
   }
   .perf-search-intro > p {
     max-width: 100%;
@@ -464,10 +464,10 @@
     gap: 12px;
   }
   .perf-search-card h3 {
-    font-size: 13px;
+    font-size: var(--text-body);
   }
   .perf-search-card p {
-    font-size: 11px;
+    font-size: var(--text-small);
   }
   .perf-search-card > span {
     height: 36px;
@@ -477,9 +477,9 @@
     padding: 8px 2px;
   }
   .perf-search-task h3 {
-    font-size: 12px;
+    font-size: var(--text-body);
   }
   .perf-search-task p {
-    font-size: 11px;
+    font-size: var(--text-small);
   }
 }

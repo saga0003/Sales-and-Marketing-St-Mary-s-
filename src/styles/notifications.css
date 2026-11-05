@@ -1,0 +1,216 @@
+.notification-count {
+  position: absolute;
+  top: -0.3rem;
+  right: -0.4rem;
+  min-width: 1.35rem;
+  min-height: 1.35rem;
+  border-radius: 1rem;
+  padding: 0 0.3rem;
+  background: #6745dc;
+  color: #fff;
+  border: 2px solid #fff;
+  font-size: 0.875rem;
+  line-height: 1.35;
+  font-weight: 700;
+}
+.notification-inbox {
+  position: absolute;
+  right: 0;
+  top: 3.2rem;
+  width: min(30rem, calc(100vw - 2rem));
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: 0 18px 60px #171c3126;
+  border-radius: 1.25rem;
+  z-index: 100;
+  overflow: hidden;
+  text-align: left;
+}
+.notification-inbox-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 1.15rem 0.75rem;
+}
+.notification-inbox-heading h2 {
+  font-size: 1.25rem;
+  line-height: 1.4;
+}
+.notification-inbox-heading p {
+  font-size: 0.875rem;
+  color: var(--muted);
+  margin-top: 0.25rem;
+}
+.notification-inbox-heading .icon-button {
+  flex-shrink: 0;
+}
+.notification-inbox-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0 1rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+.notification-inbox .text-link {
+  font-size: 0.875rem;
+}
+.notification-list {
+  max-height: min(31rem, 55dvh);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.notification-item {
+  display: flex;
+  align-items: flex-start;
+  border-bottom: 1px solid #efedf6;
+  padding: 0.25rem 0.6rem 0.25rem 0.25rem;
+}
+.notification-item.unread {
+  background: #f6f3ff;
+}
+.notification-open {
+  display: flex;
+  gap: 0.7rem;
+  align-items: flex-start;
+  text-align: left;
+  border: 0;
+  border-radius: 0.6rem;
+  background: transparent;
+  padding: 0.85rem 0.5rem;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.5;
+}
+.notification-open:hover {
+  background: #eee8ff;
+}
+.notification-open > span:nth-child(2) {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.notification-open strong,
+.notification-message {
+  display: block;
+}
+.notification-open strong {
+  font-size: 1rem;
+  font-weight: 650;
+}
+.notification-message {
+  font-size: 0.875rem;
+  color: #56546d;
+  margin-top: 0.15rem;
+}
+.notification-open small {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--muted);
+  margin-top: 0.4rem;
+}
+.notification-open > svg {
+  color: #77718e;
+  margin-top: 0.25rem;
+}
+.notification-event-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  background: transparent;
+  flex-shrink: 0;
+  border-radius: 50%;
+  margin-top: 0.5rem;
+}
+.unread .notification-event-dot {
+  background: var(--violet);
+}
+.notification-mark {
+  width: 2.3rem;
+  min-width: 2.3rem;
+  height: 2.3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0.6rem;
+  color: var(--violet);
+  background: #fff;
+  margin-top: 0.85rem;
+}
+.notification-mark:hover {
+  background: #e8dfff;
+}
+.notification-empty {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 2.25rem 1.5rem;
+  color: var(--muted);
+}
+.notification-empty h3 {
+  font-size: 1rem;
+  color: var(--ink);
+}
+.notification-empty p {
+  font-size: 0.875rem;
+}
+.notification-empty > svg {
+  color: var(--violet);
+}
+.notification-inbox-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem 0;
+}
+.notification-session-note {
+  font-size: 0.875rem;
+  color: var(--muted);
+  padding: 0.5rem 1rem 0.9rem;
+}
+.notification-error {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  padding: 0.65rem 1rem;
+  color: #a63e3c;
+  background: #fff0ee;
+}
+.notification-help {
+  font-size: 0.875rem !important;
+  line-height: 1.6 !important;
+  margin-top: 1rem !important;
+  color: var(--muted);
+}
+.notification-settings .settings-row {
+  align-items: flex-start;
+  gap: 1rem;
+}
+.notification-settings .settings-row .button {
+  flex-shrink: 0;
+}
+@media (max-width: 600px) {
+  .notification-inbox {
+    position: fixed;
+    top: 5rem;
+    right: 1rem;
+    left: 1rem;
+    width: auto;
+    max-height: calc(100dvh - 6rem);
+  }
+  .notification-list {
+    max-height: calc(100dvh - 22rem);
+    min-height: 6rem;
+  }
+  .notification-inbox-heading {
+    padding: 0.9rem;
+  }
+  .notification-settings .settings-row {
+    flex-wrap: wrap;
+  }
+}

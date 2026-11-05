@@ -17,7 +17,7 @@ dialog.int-brief-modal {
 }
 .int-brief-helper {
   color: #716680;
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.75;
   margin: -8px 0 0;
 }
@@ -40,7 +40,7 @@ dialog.int-brief-modal {
   align-items: center;
   gap: 9px;
   color: #666377;
-  font-size: 12px;
+  font-size: var(--text-body);
   white-space: nowrap;
 }
 .int-status-dot {
@@ -74,14 +74,14 @@ dialog.int-brief-modal {
   min-width: 21px;
   padding: 2px 5px;
   border-radius: 6px;
-  font-size: 10px;
+  font-size: var(--text-small);
 }
 .int-tabs-note {
   display: flex;
   align-items: center;
   gap: 7px;
   color: #686378;
-  font-size: 11px;
+  font-size: var(--text-small);
   margin: 0 0 10px;
 }
 .int-summary-grid {
@@ -122,7 +122,7 @@ dialog.int-brief-modal {
 }
 .int-summary-number {
   display: block;
-  font-size: 26px;
+  font-size: 1.625rem;
   line-height: 1.1;
   font-weight: 650;
   letter-spacing: -0.7px;
@@ -130,13 +130,13 @@ dialog.int-brief-modal {
 .int-summary-label {
   display: block;
   color: #686376;
-  font-size: 12px;
+  font-size: var(--text-body);
   margin-top: 6px;
 }
 .int-summary-caption {
   width: 100%;
   color: #686375;
-  font-size: 11px;
+  font-size: var(--text-small);
   margin-top: 2px;
 }
 .int-discover-layout {
@@ -159,7 +159,7 @@ dialog.int-brief-modal {
 }
 .int-section-heading h2,
 .int-watch-toolbar h2 {
-  font-size: 17px;
+  font-size: 1.0625rem;
   font-weight: 650;
   margin: 0;
   letter-spacing: -0.35px;
@@ -167,12 +167,12 @@ dialog.int-brief-modal {
 .int-section-heading p,
 .int-watch-toolbar p {
   color: #696276;
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.6;
   margin: 7px 0 0;
 }
 .int-result-count {
-  font-size: 11px;
+  font-size: var(--text-small);
   white-space: nowrap;
   color: #696278;
 }
@@ -191,7 +191,7 @@ dialog.int-brief-modal {
   background: transparent;
   color: #696278;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--text-small);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -212,7 +212,7 @@ dialog.int-brief-modal {
   min-width: 16px;
   border-radius: 5px;
   padding: 2px 4px;
-  font-size: 9px;
+  font-size: var(--text-small);
 }
 .int-search-row {
   display: flex;
@@ -246,7 +246,7 @@ dialog.int-brief-modal {
   outline: 0;
   color: #343044;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-body);
   height: 39px;
 }
 .int-search input::placeholder {
@@ -265,7 +265,7 @@ dialog.int-brief-modal {
 .int-category-select {
   width: auto !important;
   min-width: 126px;
-  font-size: 11px !important;
+  font-size: var(--text-body) !important;
   padding-right: 28px !important;
 }
 .int-opportunity {
@@ -301,7 +301,7 @@ dialog.int-brief-modal {
   flex-wrap: wrap;
   gap: 6px;
   color: #6a6278;
-  font-size: 10px;
+  font-size: var(--text-small);
   line-height: 1.6;
 }
 .int-meta-dot {
@@ -321,7 +321,7 @@ dialog.int-brief-modal {
   padding: 0;
   background: transparent;
   font: inherit;
-  font-size: 14px;
+  font-size: var(--text-body);
   font-weight: 600;
   line-height: 1.55;
   color: #302a45;
@@ -333,7 +333,7 @@ dialog.int-brief-modal {
   color: #7157a7;
 }
 .int-opportunity-body > p {
-  font-size: 12px;
+  font-size: var(--text-body);
   line-height: 1.7;
   margin: 0;
   color: #696276;
@@ -354,14 +354,14 @@ dialog.int-brief-modal {
   align-items: center;
   gap: 5px;
   color: #6b627b;
-  font-size: 10px;
+  font-size: var(--text-small);
 }
 .int-verification {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   color: #756251;
-  font-size: 10px;
+  font-size: var(--text-small);
 }
 .int-verification.is-verified {
   color: #4c6c62;
@@ -399,13 +399,13 @@ dialog.int-brief-modal {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 9px;
+  font-size: var(--text-small);
   letter-spacing: 1.1px;
   color: #6f5e86;
   font-weight: 650;
 }
 .int-editorial-card h2 {
-  font-size: 23px;
+  font-size: 1.4375rem;
   line-height: 1.35;
   font-weight: 550;
   letter-spacing: -0.7px;
@@ -413,7 +413,7 @@ dialog.int-brief-modal {
   color: #443358;
 }
 .int-editorial-card > p {
-  font-size: 12px;
+  font-size: var(--text-body);
   line-height: 1.85;
   color: #6f5f82;
   margin: 0;
@@ -430,7 +430,7 @@ dialog.int-brief-modal {
   align-items: center;
   margin-top: 18px;
   color: #6f5f83;
-  font-size: 12px;
+  font-size: var(--text-body);
   line-height: 1.7;
 }
 .int-editorial-bottom strong {
@@ -451,7 +451,7 @@ dialog.int-brief-modal {
   padding: 24px !important;
 }
 .int-process-card h3 {
-  font-size: 13px;
+  font-size: var(--text-body);
   margin: 0 0 22px;
   font-weight: 600;
 }
@@ -477,16 +477,16 @@ dialog.int-brief-modal {
   background: #f2eef8;
   border-radius: 8px;
   color: #715b92;
-  font-size: 10px;
+  font-size: var(--text-small);
   font-weight: 650;
 }
 .int-process-card li strong {
-  font-size: 11px;
+  font-size: var(--text-small);
   font-weight: 600;
 }
 .int-process-card li p {
   color: #6b627b;
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.7;
   margin: 4px 0 0;
 }
@@ -501,7 +501,7 @@ dialog.int-brief-modal {
 }
 .int-manual-note p {
   color: #6a6178;
-  font-size: 10px;
+  font-size: var(--text-small);
   line-height: 1.8;
   margin: 0;
 }
@@ -520,14 +520,14 @@ dialog.int-brief-modal {
   color: #6c6081;
 }
 .int-empty h3 {
-  font-size: 16px;
+  font-size: var(--text-body);
   margin: 18px 0 6px;
   color: #534360;
   font-weight: 550;
 }
 .int-empty p {
   color: #6b6279;
-  font-size: 12px;
+  font-size: var(--text-body);
   line-height: 1.75;
   max-width: 320px;
   margin: 0 0 17px;
@@ -543,13 +543,13 @@ dialog.int-brief-modal {
   flex: 1;
 }
 .int-watch-banner h2 {
-  font-size: 16px;
+  font-size: var(--text-body);
   font-weight: 600;
   margin: 0 0 7px;
 }
 .int-watch-banner p {
   color: #6c627a;
-  font-size: 12px;
+  font-size: var(--text-body);
   line-height: 1.7;
   max-width: 650px;
   margin: 0;
@@ -614,7 +614,7 @@ dialog.int-brief-modal {
   background: #fcf0f3 !important;
 }
 .int-watch-card h3 {
-  font-size: 14px;
+  font-size: var(--text-body);
   line-height: 1.5;
   margin: 18px 0 6px;
   font-weight: 600;
@@ -624,7 +624,7 @@ dialog.int-brief-modal {
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-  font-size: 10px;
+  font-size: var(--text-small);
   color: #6d607c;
 }
 .int-watch-subtitle > span {
@@ -632,7 +632,7 @@ dialog.int-brief-modal {
 }
 .int-watch-notes {
   margin: 14px 0;
-  font-size: 12px;
+  font-size: var(--text-body);
   color: #6c607b;
   line-height: 1.75;
   flex: 1;
@@ -644,7 +644,7 @@ dialog.int-brief-modal {
   gap: 6px;
   color: #765899;
   text-decoration: none;
-  font-size: 11px;
+  font-size: var(--text-small);
   font-weight: 550;
   overflow-wrap: anywhere;
 }
@@ -667,7 +667,7 @@ dialog.int-brief-modal {
   width: 100%;
 }
 .int-watch-bottom > span:last-child {
-  font-size: 9px;
+  font-size: var(--text-small);
   color: #6d607d;
 }
 .int-sources-list {
@@ -695,12 +695,12 @@ dialog.int-brief-modal {
   min-width: 0;
 }
 .int-source-row h3 {
-  font-size: 13px;
+  font-size: var(--text-body);
   font-weight: 600;
   margin: 0 0 7px;
 }
 .int-source-category {
-  font-size: 11px;
+  font-size: var(--text-small);
   color: #6d607d;
   min-width: 130px;
 }
@@ -717,14 +717,14 @@ dialog.int-brief-modal {
   gap: 8px;
 }
 .int-detail > h2 {
-  font-size: 24px;
+  font-size: 1.5rem;
   font-weight: 550;
   line-height: 1.4;
   letter-spacing: -0.6px;
   margin: 20px 0 13px;
 }
 .int-detail-summary {
-  font-size: 14px;
+  font-size: var(--text-body);
   color: #6e607e;
   line-height: 1.85;
   margin: 0 0 23px;
@@ -739,7 +739,7 @@ dialog.int-brief-modal {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--text-body);
   color: #775a90;
 }
 .int-evidence-heading strong {
@@ -753,16 +753,16 @@ dialog.int-brief-modal {
 }
 .int-evidence dt {
   color: #6d5f80;
-  font-size: 10px;
+  font-size: var(--text-small);
   margin-bottom: 5px;
 }
 .int-evidence dd {
-  font-size: 12px;
+  font-size: var(--text-body);
   color: #5f4b70;
   margin: 0;
 }
 .int-evidence-note {
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.8;
   color: #705f81;
   border-top: 1px solid #e9dff0;
@@ -784,13 +784,13 @@ dialog.int-brief-modal {
   margin-top: 2px;
 }
 .int-angle h3 {
-  font-size: 12px;
+  font-size: var(--text-body);
   color: #7a6142;
   font-weight: 600;
   margin: 0 0 7px;
 }
 .int-angle p {
-  font-size: 12px;
+  font-size: var(--text-body);
   line-height: 1.8;
   color: #77614d;
   margin: 0;
@@ -803,14 +803,14 @@ dialog.int-brief-modal {
   margin-top: 23px;
 }
 .int-verify-control > span {
-  font-size: 10px;
+  font-size: var(--text-small);
   color: #6e5f7f;
 }
 .int-verify-control > p {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 12px;
+  font-size: var(--text-body);
   color: #745d83;
 }
 .int-detail-footer {
@@ -829,7 +829,7 @@ dialog.int-brief-modal {
 }
 .int-draft-note {
   margin: 14px 0 0;
-  font-size: 10px;
+  font-size: var(--text-small);
   text-align: right;
   color: #6f5e81;
   line-height: 1.6;
@@ -841,7 +841,7 @@ dialog.int-brief-modal {
   padding-top: 4px;
 }
 .int-watch-form .field small {
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.6;
 }
 .int-watch-form textarea {
@@ -852,7 +852,7 @@ dialog.int-brief-modal {
   display: flex;
   align-items: center;
   gap: 9px;
-  font-size: 12px;
+  font-size: var(--text-body);
   color: #735e81;
   min-height: 30px;
 }
@@ -875,13 +875,13 @@ dialog.int-brief-modal {
   margin-top: 2px;
 }
 .int-form-note p {
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.75;
   margin: 0;
 }
 .int-form-error {
   color: #a14961;
-  font-size: 12px;
+  font-size: var(--text-body);
   line-height: 1.6;
   margin: 0;
 }
@@ -894,7 +894,7 @@ dialog.int-brief-modal {
 }
 .int-confirm-copy {
   color: #725e82;
-  font-size: 14px;
+  font-size: var(--text-body);
   line-height: 1.8;
   margin: 0 0 20px;
 }
@@ -956,7 +956,7 @@ dialog.int-brief-modal {
 }
 @media (max-width: 640px) {
   .int-mode {
-    font-size: 10px;
+    font-size: var(--text-small);
   }
   .int-summary-grid {
     gap: 10px;
@@ -978,10 +978,10 @@ dialog.int-brief-modal {
     height: 17px;
   }
   .int-summary-number {
-    font-size: 23px;
+    font-size: 1.4375rem;
   }
   .int-summary-label {
-    font-size: 10px;
+    font-size: var(--text-small);
     line-height: 1.55;
   }
   .int-summary-caption {
@@ -991,7 +991,7 @@ dialog.int-brief-modal {
     margin-top: 22px;
   }
   .int-tabs-row .tab {
-    font-size: 12px;
+    font-size: var(--text-body);
     gap: 6px;
   }
   .int-tab-count {
@@ -1001,10 +1001,10 @@ dialog.int-brief-modal {
     padding: 22px 16px 17px;
   }
   .int-section-heading h2 {
-    font-size: 16px;
+    font-size: var(--text-body);
   }
   .int-section-heading p {
-    font-size: 10px;
+    font-size: var(--text-small);
   }
   .int-result-count {
     display: none;
@@ -1014,7 +1014,7 @@ dialog.int-brief-modal {
     gap: 1px;
   }
   .int-filter-tabs button {
-    font-size: 10px;
+    font-size: var(--text-small);
     padding: 6px 8px;
   }
   .int-search-row {
@@ -1025,7 +1025,7 @@ dialog.int-brief-modal {
     min-width: 108px;
   }
   .int-search input {
-    font-size: 11px;
+    font-size: var(--text-body);
   }
   .int-opportunity {
     padding: 20px 15px;
@@ -1042,14 +1042,14 @@ dialog.int-brief-modal {
     height: 17px;
   }
   .int-opportunity-meta {
-    font-size: 9px;
+    font-size: var(--text-small);
     gap: 4px;
   }
   .int-opportunity-title {
-    font-size: 13px;
+    font-size: var(--text-body);
   }
   .int-opportunity-body > p {
-    font-size: 11px;
+    font-size: var(--text-small);
   }
   .int-opportunity-footer {
     gap: 8px;
@@ -1070,10 +1070,10 @@ dialog.int-brief-modal {
     flex-basis: calc(100% - 60px);
   }
   .int-watch-banner h2 {
-    font-size: 14px;
+    font-size: var(--text-body);
   }
   .int-watch-banner p {
-    font-size: 11px;
+    font-size: var(--text-small);
   }
   .int-watch-toolbar {
     padding: 21px 18px;
@@ -1101,7 +1101,7 @@ dialog.int-brief-modal {
     margin-left: auto;
   }
   .int-detail > h2 {
-    font-size: 21px;
+    font-size: 1.3125rem;
   }
   .int-evidence {
     padding: 17px;

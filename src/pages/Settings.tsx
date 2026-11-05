@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import {
   Check,
   ChevronDown,
@@ -21,11 +21,16 @@ import type { Role, User } from '../lib/types';
 import { Avatar, Badge, Button, EmptyState, Modal, PageHeading } from '../components/UI';
 import Connections from '../components/Connections';
 import { formatDate } from '../lib/utils';
+import { NotificationSettings } from '../components/Notifications';
 import '../styles/connections.css';
 
 type TeamUser = User & { active?: boolean };
 type AccessLink = { setupUrl: string; expiresAt?: string; name: string; purpose: string };
 type SettingsTab = 'connections' | 'team' | 'preferences';
+const readSettingsTab = (): SettingsTab => {
+  const value = new URLSearchParams(window.location.hash.split('?')[1]).get('tab');
+  return value === 'team' || value === 'preferences' ? value : 'connections';
+};
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : 'We could not save this change. Please try again.';
 
@@ -37,7 +42,12 @@ export default function Settings({
   onDensityChange: (value: boolean) => void;
 }) {
   const { data, mutate, toast } = useWorkspace();
-  const [tab, setTab] = useState<SettingsTab>('connections');
+  const [tab, setTab] = useState<SettingsTab>(readSettingsTab);
+  useEffect(() => {
+    const changed = () => setTab(readSettingsTab());
+    window.addEventListener('hashchange', changed);
+    return () => window.removeEventListener('hashchange', changed);
+  }, []);
   const [addUser, setAddUser] = useState(false);
   const [editUser, setEditUser] = useState<TeamUser | null>(null);
   const [accessLink, setAccessLink] = useState<AccessLink | null>(null);
@@ -88,7 +98,15 @@ export default function Settings({
             ['preferences', 'Preferences', Settings2],
           ] as const
         ).map(([id, label, Icon]) => (
-          <button key={id} type="button" aria-pressed={tab === id} onClick={() => setTab(id)}>
+          <button
+            key={id}
+            type="button"
+            aria-pressed={tab === id}
+            onClick={() => {
+              setTab(id);
+              window.location.hash = `settings?tab=${id}`;
+            }}
+          >
             <Icon size={17} />
             {label}
             {id === 'team' && <span>{activeCount}</span>}
@@ -204,6 +222,7 @@ export default function Settings({
       )}
       {tab === 'preferences' && (
         <div className="settings-grid">
+          <NotificationSettings />
           <section className="panel settings-card">
             <div className="settings-title-icon">
               <Settings2 size={20} />

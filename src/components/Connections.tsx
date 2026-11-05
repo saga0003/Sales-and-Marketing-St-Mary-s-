@@ -19,16 +19,23 @@ import {
   Unplug,
 } from 'lucide-react';
 import { useWorkspace } from '../lib/workspace';
-import { institutions, type ProviderSetup, type Connection } from '../lib/types';
+import { institutions, type ProviderSetup, type Connection, type ProviderId } from '../lib/types';
 import { Badge, Button, EmptyState, Modal, PlatformIcon } from './UI';
 import { formatDate } from '../lib/utils';
 import '../styles/connections.css';
+import {
+  canPublish,
+  canReport,
+  credentialGroup,
+  providerNames,
+  providerPlatform,
+} from '../lib/providers';
 
 type ConnectionCatalog = { providers: ProviderSetup[]; connections: Connection[] };
 type AccountChoice = {
   id: string;
   name: string;
-  kind: 'ga4' | 'instagram';
+  kind: 'ga4' | ProviderId;
   platform?: string;
   timezone?: string;
 };
@@ -48,8 +55,13 @@ const capabilityLabel = (value: string) =>
     publish: 'Publish approved posts',
     publish_content: 'Publish approved posts',
     instagram_publish: 'Publish approved posts',
-    'analytics:read': 'Read website reports',
-    'publish:image': 'Publish approved image posts',
+    'analytics:read': 'Read account reports',
+    'publish:image': 'Approved image posts',
+    'publish:text': 'Approved text posts',
+    'publish:carousel': 'Approved image carousels',
+    'publish:video': 'Approved videos',
+    'ads:read': 'Read advertising reports',
+    'search:read': 'Read search reports',
     'account:read': 'Read account identity',
   })[value] || value.replaceAll('_', ' ').replaceAll('.', ' ');
 
@@ -75,6 +87,7 @@ export default function Connections() {
   const [selectAccount, setSelectAccount] = useState<Connection | null>(null);
   const [disconnect, setDisconnect] = useState<Connection | null>(null);
   const [filter, setFilter] = useState('all');
+  const [providerGroup, setProviderGroup] = useState('all');
   const [callback, setCallback] = useState(
     () => new URLSearchParams(window.location.hash.split('?')[1] || ''),
   );
@@ -117,11 +130,34 @@ export default function Connections() {
       toast(
         kind === 'test'
           ? `${connection.accountName || 'Account'} access checked.`
-          : 'Your latest website report has been imported.',
+          : 'Your latest account report has been imported.',
       );
       await reload();
     } catch (err) {
       await reload();
+      setError(messageOf(err));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function setReportSchedule(
+    connection: Connection,
+    autoSync: boolean,
+    syncIntervalHours = connection.syncIntervalHours || 24,
+  ) {
+    setBusy(`${connection.id}:schedule`);
+    setError('');
+    try {
+      await mutate(`/connections/${connection.id}/sync-settings`, 'POST', {
+        autoSync,
+        syncIntervalHours,
+      });
+      toast(
+        autoSync ? 'Automatic report imports enabled.' : 'Automatic report imports turned off.',
+      );
+      await reload();
+    } catch (err) {
       setError(messageOf(err));
     } finally {
       setBusy('');
@@ -195,92 +231,132 @@ export default function Connections() {
         </div>
       )}
 
+      <div className="connection-onboarding-note">
+        <strong>One app setup, then a few clicks per account.</strong>
+        <p>
+          Configure your Google, Meta, or LinkedIn application once. Each service asks for its own
+          permissions, then lets you choose a school account. App review and account eligibility are
+          shown in its setup steps.
+        </p>
+        <a
+          className="text-link"
+          href="https://github.com/saga0003/Sales-and-Marketing-St-Mary-s-/blob/main/docs/CONNECTING-ACCOUNTS.md"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Connection guide <ArrowUpRight size={15} />
+        </a>
+      </div>
+      <div className="tabs connection-group-tabs" aria-label="Provider groups">
+        {['all', 'google', 'meta', 'linkedin'].map((group) => (
+          <button
+            type="button"
+            key={group}
+            className={`tab ${providerGroup === group ? 'active' : ''}`}
+            aria-pressed={providerGroup === group}
+            onClick={() => setProviderGroup(group)}
+          >
+            {group === 'all'
+              ? 'All services'
+              : group === 'google'
+                ? 'Google'
+                : group === 'meta'
+                  ? 'Meta'
+                  : 'LinkedIn'}
+          </button>
+        ))}
+      </div>
       <div className="connection-provider-grid">
-        {providers.map((provider) => (
-          <section className="panel connection-provider" key={provider.id}>
-            <div className="connection-provider-heading">
-              <span className={`connection-provider-symbol connection-provider-${provider.id}`}>
-                {provider.id === 'google' ? (
-                  <BarChart3 size={23} />
-                ) : (
-                  <PlatformIcon platform="instagram" size={25} />
-                )}
-              </span>
-              <div>
-                <h3>{provider.name}</h3>
+        {providers
+          .filter(
+            (provider) =>
+              providerGroup === 'all' ||
+              (provider.credentialGroup || credentialGroup(provider.id)) === providerGroup,
+          )
+          .map((provider) => (
+            <section className="panel connection-provider" key={provider.id}>
+              <div className="connection-provider-heading">
+                <span className={`connection-provider-symbol connection-provider-${provider.id}`}>
+                  {providerPlatform(provider.id) ? (
+                    <PlatformIcon platform={providerPlatform(provider.id)!} size={25} />
+                  ) : (
+                    <BarChart3 size={23} />
+                  )}
+                </span>
+                <div>
+                  <h3>{provider.name}</h3>
+                  <span>
+                    {canPublish(provider.capabilities || [])
+                      ? canReport(provider.capabilities || [])
+                        ? 'Reporting & approved publishing'
+                        : 'Approved publishing'
+                      : 'Account reporting'}
+                  </span>
+                </div>
+                <Badge tone={provider.configured ? 'green' : 'amber'}>
+                  {provider.configured ? 'App ready' : 'Setup required'}
+                </Badge>
+              </div>
+              <p>{provider.description}</p>
+              <div className="connection-provider-scope">
+                <ShieldCheck size={15} />
                 <span>
-                  {provider.id === 'google' ? 'Website reporting' : 'Approved social publishing'}
+                  {canPublish(provider.capabilities || [])
+                    ? 'Every publication requires an approved revision'
+                    : 'Imports reports without changing account settings or ad spend'}
                 </span>
               </div>
-              <Badge tone={provider.configured ? 'green' : 'amber'}>
-                {provider.configured ? 'App ready' : 'Setup required'}
-              </Badge>
-            </div>
-            <p>
-              {provider.description ||
-                (provider.id === 'google'
-                  ? 'Bring your GA4 traffic, landing pages and enquiry events into Performance.'
-                  : 'Send approved image posts to the professional account you select.')}
-            </p>
-            <div className="connection-provider-scope">
-              <ShieldCheck size={15} />
-              <span>
-                {provider.id === 'google'
-                  ? 'Read-only access to your selected property'
-                  : 'Your review stays part of every publication'}
-              </span>
-            </div>
-            {provider.error && <p className="connection-provider-error">{provider.error}</p>}
-            <div className="connection-provider-actions">
-              {isManager ? (
-                <>
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    disabled={!provider.configured && !provider.canConfigure}
-                    onClick={() =>
-                      provider.configured ? setAuthorize({ provider }) : setSetup(provider)
-                    }
-                  >
-                    {provider.configured ? (
-                      <>
-                        <PlusIcon />
-                        Connect account
-                      </>
-                    ) : (
-                      <>
-                        <Settings2 size={15} />
-                        Set up {provider.name}
-                      </>
-                    )}
-                    <ArrowRight size={15} />
-                  </Button>
-                  {provider.configured && (
+              {provider.error && <p className="connection-provider-error">{provider.error}</p>}
+              <div className="connection-provider-actions">
+                {isManager ? (
+                  <>
                     <Button
+                      variant="primary"
                       size="sm"
-                      variant="ghost"
-                      disabled={!provider.canConfigure}
-                      onClick={() => setSetup(provider)}
+                      disabled={!provider.configured && !provider.canConfigure}
+                      onClick={() =>
+                        provider.configured ? setAuthorize({ provider }) : setSetup(provider)
+                      }
                     >
-                      <Settings2 size={15} />
-                      App settings
+                      {provider.configured ? (
+                        <>
+                          <PlusIcon />
+                          Connect account
+                        </>
+                      ) : (
+                        <>
+                          <Settings2 size={15} />
+                          Set up {provider.name}
+                        </>
+                      )}
+                      <ArrowRight size={15} />
                     </Button>
-                  )}
-                </>
-              ) : (
-                <span className="connection-detail-note">
-                  A manager can connect your school’s account.
-                </span>
+                    {provider.configured && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={!provider.canConfigure}
+                        onClick={() => setSetup(provider)}
+                      >
+                        <Settings2 size={15} />
+                        App settings
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  <span className="connection-detail-note">
+                    A manager can connect your school’s account.
+                  </span>
+                )}
+              </div>
+              {!provider.configured && !provider.canConfigure && isManager && (
+                <p className="connection-detail-note">
+                  Provider setup is waiting for secure credential storage to be configured for this
+                  workspace.
+                </p>
               )}
-            </div>
-            {!provider.configured && !provider.canConfigure && isManager && (
-              <p className="connection-detail-note">
-                Provider setup is waiting for secure credential storage to be configured for this
-                workspace.
-              </p>
-            )}
-          </section>
-        ))}
+            </section>
+          ))}
       </div>
 
       <section className="panel connection-accounts">
@@ -311,7 +387,7 @@ export default function Connections() {
                 connection.status === 'connected'
                   ? connection.lastSyncAt
                     ? 'Data imported'
-                    : connection.provider === 'google'
+                    : canReport(connection.capabilities)
                       ? 'Ready to import'
                       : 'Account connected'
                   : connection.status === 'awaiting_selection'
@@ -325,18 +401,16 @@ export default function Connections() {
                     <span
                       className={`connection-account-symbol connection-provider-${connection.provider}`}
                     >
-                      {connection.provider === 'google' ? (
-                        <BarChart3 size={20} />
+                      {providerPlatform(connection.provider) ? (
+                        <PlatformIcon platform={providerPlatform(connection.provider)!} size={22} />
                       ) : (
-                        <PlatformIcon platform="instagram" size={22} />
+                        <BarChart3 size={20} />
                       )}
                     </span>
                     <div>
                       <h3>
                         {connection.accountName ||
-                          (connection.provider === 'google'
-                            ? 'Google authorization'
-                            : 'Instagram authorization')}
+                          `${providerNames[connection.provider]} authorization`}
                       </h3>
                       <p>
                         {connection.institution}
@@ -376,7 +450,7 @@ export default function Connections() {
                         <Clock3 size={13} />
                         Access checked: <strong>{connectionDate(connection.lastTestAt)}</strong>
                       </span>
-                      {connection.provider === 'google' && (
+                      {canReport(connection.capabilities) && (
                         <span>
                           <RefreshCw size={13} />
                           Data imported: <strong>{connectionDate(connection.lastSyncAt)}</strong>
@@ -384,6 +458,68 @@ export default function Connections() {
                       )}
                     </div>
                   </div>
+                  {connection.capabilities.includes('analytics:read') &&
+                    connection.status !== 'disconnected' && (
+                      <div className="connection-sync-settings">
+                        <div>
+                          <strong>Automatic report imports</strong>
+                          <p>
+                            Imports a 28-day window with a two-day reporting lag. Provider quotas
+                            apply.
+                          </p>
+                          {connection.autoSync && (
+                            <small>
+                              Next scheduled check: {connectionDate(connection.nextSyncAt || null)}.
+                              Due accounts are processed in turn.
+                            </small>
+                          )}
+                        </div>
+                        {isManager ? (
+                          <div className="connection-sync-controls">
+                            <label className="checkbox-field">
+                              <input
+                                type="checkbox"
+                                checked={!!connection.autoSync}
+                                disabled={
+                                  !!busy ||
+                                  (connection.status !== 'connected' && !connection.autoSync)
+                                }
+                                onChange={(event) =>
+                                  void setReportSchedule(connection, event.target.checked)
+                                }
+                              />
+                              <span>
+                                {connection.autoSync ? 'Enabled' : 'Enable automatic imports'}
+                              </span>
+                            </label>
+                            {connection.autoSync && (
+                              <select
+                                aria-label={`Import frequency for ${connection.accountName}`}
+                                value={connection.syncIntervalHours || 24}
+                                disabled={!!busy}
+                                onChange={(event) =>
+                                  void setReportSchedule(
+                                    connection,
+                                    true,
+                                    Number(event.target.value),
+                                  )
+                                }
+                              >
+                                <option value={6}>Every 6 hours</option>
+                                <option value={12}>Every 12 hours</option>
+                                <option value={24}>Every day</option>
+                                <option value={48}>Every 2 days</option>
+                                <option value={168}>Every week</option>
+                              </select>
+                            )}
+                          </div>
+                        ) : (
+                          <Badge tone={connection.autoSync ? 'green' : 'gray'}>
+                            {connection.autoSync ? 'Enabled' : 'Off'}
+                          </Badge>
+                        )}
+                      </div>
+                    )}
                   {connection.error && (
                     <p className="connection-account-error">
                       <CircleAlert size={15} />
@@ -413,7 +549,7 @@ export default function Connections() {
                             <ShieldCheck size={14} />
                             {busy === `${connection.id}:test` ? 'Checking…' : 'Test access'}
                           </Button>
-                          {connection.provider === 'google' && (
+                          {canReport(connection.capabilities) && (
                             <Button
                               size="sm"
                               variant="primary"
@@ -489,8 +625,9 @@ export default function Connections() {
         <LockKeyhole size={18} />
         <p>
           <strong>Access stays specific.</strong> Reporting, publishing and advertising are separate
-          capabilities. This release connects GA4 reporting and eligible Instagram image publishing;
-          other service adapters remain on the roadmap.
+          capabilities. Accounts expose only the actions supported by the provider and your granted
+          permissions. Advertising connections import reports; they do not launch campaigns or
+          change budgets.
         </p>
       </div>
       {setup && (
@@ -550,6 +687,11 @@ function ProviderSettings({
   const { mutate, toast } = useWorkspace();
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
+  const [extraFields, setExtraFields] = useState<Record<string, string>>({});
+  const group = provider.credentialGroup || credentialGroup(provider.id);
+  const fields = (provider.credentialFields || []).filter(
+    (field) => !['clientId', 'clientSecret'].includes(field.key),
+  );
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -559,8 +701,13 @@ function ProviderSettings({
     setError('');
     try {
       await mutate(`/connections/providers/${provider.id}`, 'PUT', {
-        clientId: clientId.trim(),
-        clientSecret: clientSecret.trim(),
+        ...(clientId.trim() ? { clientId: clientId.trim() } : {}),
+        ...(clientSecret.trim() ? { clientSecret: clientSecret.trim() } : {}),
+        ...Object.fromEntries(
+          Object.entries(extraFields)
+            .filter(([, value]) => value.trim())
+            .map(([key, value]) => [key, value.trim()]),
+        ),
       });
       setClientSecret('');
       toast(`${provider.name} app settings saved. You can now authorize an account.`);
@@ -583,8 +730,13 @@ function ProviderSettings({
         <Badge tone="violet">One-time manager setup</Badge>
         <p className="connection-summary">
           Register this workspace in your{' '}
-          {provider.id === 'google' ? 'Google Cloud' : 'Meta developer'} app, then save its
-          credentials here. You’ll choose and authorize the school account in the next step.
+          {group === 'google'
+            ? 'Google Cloud'
+            : group === 'meta'
+              ? 'Meta developer'
+              : 'LinkedIn developer'}{' '}
+          app, then save its credentials here. You’ll choose and authorize the school account in the
+          next step.
         </p>
         {provider.requirements.length > 0 && (
           <ol className="setup-steps">
@@ -619,9 +771,9 @@ function ProviderSettings({
           <small>Copy this exact address into the provider’s app settings.</small>
         </label>
         <label className="field">
-          {provider.id === 'google' ? 'OAuth client ID' : 'Meta app ID'}
+          {group === 'meta' ? 'Meta app ID' : 'OAuth client ID'}
           <input
-            required
+            required={!provider.configured}
             autoComplete="off"
             spellCheck={false}
             value={clientId}
@@ -630,15 +782,15 @@ function ProviderSettings({
             onChange={(event) => setClientId(event.target.value)}
             placeholder={
               provider.configured
-                ? 'Enter the app ID to replace the current setup'
+                ? 'Leave blank to keep the saved app ID'
                 : 'Paste the ID from your provider app'
             }
           />
         </label>
         <label className="field">
-          {provider.id === 'google' ? 'OAuth client secret' : 'Meta app secret'}
+          {group === 'meta' ? 'Meta app secret' : 'OAuth client secret'}
           <input
-            required
+            required={!provider.configured}
             type="password"
             autoComplete="new-password"
             spellCheck={false}
@@ -648,9 +800,38 @@ function ProviderSettings({
             onChange={(event) => setClientSecret(event.target.value)}
           />
           <small>
-            Stored encrypted by the server. Saved secrets are never returned to this screen.
+            Stored encrypted by the server. Saved secrets are never returned to this screen. Leave
+            blank to keep a saved secret when updating other settings.
           </small>
         </label>
+        {fields.map((field) => (
+          <label className="field" key={field.key}>
+            {field.label}
+            <input
+              required={field.required && !provider.configured}
+              type={field.secret ? 'password' : 'text'}
+              autoComplete={field.secret ? 'new-password' : 'off'}
+              spellCheck={false}
+              maxLength={4096}
+              placeholder={field.placeholder}
+              value={extraFields[field.key] || ''}
+              disabled={busy}
+              onChange={(event) =>
+                setExtraFields((current) => ({ ...current, [field.key]: event.target.value }))
+              }
+            />
+          </label>
+        ))}
+        <p className="connection-detail-note">
+          This application is shared by the{' '}
+          {group === 'meta' ? 'Meta' : group === 'google' ? 'Google' : 'LinkedIn'} services in this
+          workspace. Register each service’s exact callback URL when enabling it.
+        </p>
+        {provider.docsUrl && (
+          <a className="text-link" href={provider.docsUrl} target="_blank" rel="noreferrer">
+            Official provider setup documentation <ArrowUpRight size={15} />
+          </a>
+        )}
         <div className="modal-note">
           <LockKeyhole size={18} />
           <span>
@@ -708,6 +889,8 @@ function AuthorizeAccount({
           'api.instagram.com',
           'www.facebook.com',
           'facebook.com',
+          'www.linkedin.com',
+          'linkedin.com',
         ].includes(target.hostname)
       )
         throw new Error('The provider returned an unexpected authorization address.');
@@ -729,17 +912,24 @@ function AuthorizeAccount({
           <ShieldCheck size={24} />
           <div>
             <h3>
-              {provider.id === 'google'
-                ? 'Read your website reports'
-                : 'Publish the content you approve'}
+              {canPublish(provider.capabilities || [])
+                ? 'Connect reporting and approved publishing'
+                : 'Read the reports you authorize'}
             </h3>
-            <p>
-              {provider.id === 'google'
-                ? 'Choose a GA4 property after authorizing Google. This connection does not change your website or advertising campaigns.'
-                : 'Use an Instagram professional account linked to a Facebook Page your school controls. Publishing requires the exact approved content and a confirmed destination.'}
-            </p>
+            <p>{provider.description}</p>
           </div>
         </div>
+        <details className="connection-scopes">
+          <summary>Permissions this service requests</summary>
+          <ul>
+            {provider.scopes.map((scope) => (
+              <li key={scope}>
+                <code>{scope}</code>
+              </li>
+            ))}
+          </ul>
+          <p>The provider shows its own consent screen. Grant only the access you intend to use.</p>
+        </details>
         <label className="field">
           Which school is this for?
           <select
@@ -840,7 +1030,7 @@ function SelectAccount({
       title={
         connection.provider === 'google'
           ? 'Choose your GA4 property'
-          : 'Choose your Instagram account'
+          : `Choose your ${providerNames[connection.provider]} account`
       }
       onClose={() => {
         if (!busy) onClose();

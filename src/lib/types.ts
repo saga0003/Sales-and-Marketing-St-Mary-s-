@@ -1,3 +1,14 @@
+export type ProviderId =
+  | 'google'
+  | 'search_console'
+  | 'youtube'
+  | 'google_business'
+  | 'google_ads'
+  | 'instagram'
+  | 'facebook'
+  | 'linkedin'
+  | 'linkedin_member'
+  | 'meta_ads';
 export type Role = 'manager' | 'contributor';
 export type Platform = 'instagram' | 'facebook' | 'youtube' | 'linkedin' | 'google_business';
 export type PostStatus =
@@ -11,6 +22,11 @@ export interface User {
   role: Role;
   initials: string;
   active?: boolean;
+}
+export interface PublicationOptions {
+  youtubePrivacy?: 'private' | 'unlisted' | 'public';
+  madeForKids?: boolean;
+  containsSyntheticMedia?: boolean;
 }
 export interface Post {
   id: string;
@@ -34,6 +50,8 @@ export interface Post {
   sourceUrl?: string;
   mediaUrl?: string;
   assetId?: string | null;
+  assetIds?: string[];
+  publicationOptions?: PublicationOptions;
   destinationIds?: string[];
   palette: 'violet' | 'navy' | 'sage' | 'peach';
   sample?: boolean;
@@ -52,6 +70,8 @@ export type PostInput = Pick<
   sourceUrl?: string;
   mediaUrl?: string;
   assetId?: string | null;
+  assetIds?: string[];
+  publicationOptions?: PublicationOptions;
   destinationIds?: string[];
   revision?: number;
 };
@@ -98,6 +118,7 @@ export interface Task {
   priority: 'high' | 'medium' | 'low';
 }
 export interface WorkspaceDocument {
+  version: number;
   id: string;
   title: string;
   category: string;
@@ -166,9 +187,24 @@ export interface WorkspaceData {
   mediaAssets: MediaAsset[];
   publicationJobs: PublicationJob[];
   websiteAnalytics: WebsiteReport[];
+  platformAnalytics: PlatformReport[];
+  notifications: WorkspaceNotification[];
+  unreadNotificationCount: number;
+  notificationPreferences: NotificationPreferences;
+  intelligence: IntelligenceData;
 }
 export interface ProviderSetup {
-  id: 'google' | 'instagram';
+  id: ProviderId;
+  credentialGroup?: 'google' | 'meta' | 'linkedin';
+  docsUrl?: string;
+  capabilities?: string[];
+  credentialFields?: {
+    key: string;
+    label: string;
+    required: boolean;
+    secret: boolean;
+    placeholder?: string;
+  }[];
   name: string;
   configured: boolean;
   canConfigure: boolean;
@@ -180,7 +216,7 @@ export interface ProviderSetup {
 }
 export interface Connection {
   id: string;
-  provider: 'google' | 'instagram';
+  provider: ProviderId;
   accountId: string | null;
   accountName: string;
   institution: string;
@@ -190,12 +226,17 @@ export interface Connection {
   createdAt: string;
   lastTestAt: string | null;
   lastSyncAt: string | null;
+  autoSync?: boolean;
+  syncIntervalHours?: number;
+  nextSyncAt?: string | null;
   error: string | null;
 }
 export interface MediaAsset {
   id: string;
   name: string;
   mimeType: string;
+  kind?: 'image' | 'video';
+  duration?: number | null;
   size: number;
   sha256: string;
   width: number;
@@ -210,13 +251,15 @@ export interface PublicationJob {
   revision: number;
   connectionId: string;
   accountName: string;
-  platform: 'instagram';
+  platform: Platform;
   status: 'queued' | 'processing' | 'published' | 'failed' | 'needs_reconciliation' | 'cancelled';
   scheduledAt: string;
   attempts: number;
   error: string | null;
   remoteId: string | null;
   remoteUrl: string | null;
+  remoteVisibility?: string | null;
+  providerStatus?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -240,3 +283,171 @@ export const institutions = [
   'St. Mary’s Kids',
   'Cambridge MGS',
 ];
+
+export interface WorkspaceNotification {
+  id: string;
+  kind: string;
+  title: string;
+  message: string;
+  entityType: string;
+  entityId: string;
+  actorName: string;
+  actorId?: string;
+  createdAt: string;
+  readAt: string | null;
+}
+export interface NotificationPreferences {
+  sound: boolean;
+  desktop: boolean;
+}
+export interface NotificationInbox {
+  notifications: WorkspaceNotification[];
+  unreadCount: number;
+  preferences: NotificationPreferences;
+}
+export interface PlatformReport {
+  connectionId: string;
+  accountName: string;
+  institution: string;
+  provider: ProviderId;
+  startDate: string;
+  endDate: string;
+  importedAt: string;
+  currency?: string;
+  summary: {
+    key: string;
+    label: string;
+    value: number;
+    unit?: 'count' | 'currency' | 'percent' | 'seconds' | 'minutes';
+  }[];
+  tables: {
+    key: string;
+    label: string;
+    columns: {
+      key: string;
+      label: string;
+      type?: 'text' | 'number' | 'currency' | 'percent' | 'url';
+    }[];
+    rows: Record<string, string | number | null>[];
+    truncated?: boolean;
+  }[];
+  notes: string[];
+}
+export interface IntelligenceWatch {
+  id: string;
+  kind: 'source' | 'competitor';
+  resourceId: string;
+  name: string;
+  platform: string | null;
+  mode: 'rss' | 'html' | 'youtube';
+  url: string;
+  keywords: string[];
+  intervalHours: number;
+  active: boolean;
+  status: 'ready' | 'running' | 'paused' | 'error';
+  lastCheckedAt: string | null;
+  nextCheckAt: string;
+  error: string | null;
+  lastNewCount: number;
+  noticeCount: number;
+  createdAt: string;
+}
+export interface IntelligenceNotice {
+  id: string;
+  watchId: string;
+  watchName: string;
+  kind: 'source' | 'competitor';
+  title: string;
+  url: string;
+  excerpt: string;
+  publishedAt: string | null;
+  detectedAt: string;
+  updatedAt: string;
+  changeKind: 'discovered' | 'updated';
+  baseline: boolean;
+  status: 'new' | 'saved' | 'dismissed';
+  opportunityId: string | null;
+  contentHash: string;
+}
+export interface SourceCatalogItem {
+  id: string;
+  name: string;
+  url: string;
+  category: string;
+  mode: 'html' | 'rss';
+  keywords: string[];
+  note: string;
+}
+export interface SiteVerification {
+  id: string;
+  origin: string;
+  status: 'pending' | 'verified';
+  verificationUrl: string;
+  verificationToken: string;
+  metaTag: string;
+  verifiedAt: string | null;
+  lastAuditAt: string | null;
+}
+export interface SeoFinding {
+  id: string;
+  severity: 'issue' | 'warning' | 'pass' | 'info';
+  title: string;
+  detail: string;
+}
+export interface SeoAudit {
+  id: string;
+  siteId: string;
+  url: string;
+  fetchedUrl: string;
+  checkedAt: string;
+  statusCode: number;
+  title: string;
+  description: string;
+  canonical: string | null;
+  headings: { level: number; text: string }[];
+  structuredDataTypes: string[];
+  imageCount: number;
+  imagesWithoutAlt: number;
+  internalLinkCount: number;
+  externalLinkCount: number;
+  robots: string;
+  findings: SeoFinding[];
+}
+export interface AnswerPrompt {
+  id: string;
+  prompt: string;
+  intent: string;
+  institution: string;
+  locale: string;
+  language: string;
+  targetUrl: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface AnswerObservation {
+  id: string;
+  promptId: string;
+  provider: string;
+  model: string;
+  checkedAt: string;
+  answerExcerpt: string;
+  mentioned: boolean;
+  cited: boolean;
+  citationUrls: string[];
+  evidenceUrl: string;
+  notes: string;
+  recordedBy: string;
+  createdAt: string;
+  promptSnapshot?: AnswerPrompt;
+}
+export interface IntelligenceData {
+  watches: IntelligenceWatch[];
+  notices: IntelligenceNotice[];
+  sourceCatalog: SourceCatalogItem[];
+  siteVerifications: SiteVerification[];
+  seoAudits: SeoAudit[];
+  answerPrompts: AnswerPrompt[];
+  answerObservations: AnswerObservation[];
+  automation: { enabled: boolean; minimumIntervalHours: number; maxWatchesPerRun: number };
+}

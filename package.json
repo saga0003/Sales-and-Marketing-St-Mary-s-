@@ -1,7 +1,7 @@
 {
   "name": "stmarys-marketing-workspace",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "engines": {
     "node": "24.x"
@@ -10,7 +10,7 @@
     "dev": "node scripts/dev.mjs",
     "build": "tsc -b && vite build",
     "start": "node --env-file-if-exists=.env server/index.mjs",
-    "test": "node --test server/*.test.mjs server/extensions/*.test.mjs supabase/functions/marketing-media/*.test.mjs",
+    "test": "node --test server/*.test.mjs server/extensions/*.test.mjs server/intelligence/*.test.mjs supabase/functions/marketing-media/*.test.mjs",
     "check": "tsc -b",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

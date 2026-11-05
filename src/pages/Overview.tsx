@@ -143,8 +143,8 @@ export default function Overview() {
           </strong>
           <p>
             {connected.length
-              ? 'Open Connections to check access, import website reports or manage publishing destinations.'
-              : 'Authorize Google Analytics and an eligible Instagram account when you are ready. Your team can start drafting and reviewing now.'}
+              ? 'Open Connections to check access, import reports, or manage approved publishing destinations.'
+              : 'Connect your school’s analytics, social profiles, and advertising accounts when you are ready. Your team can start drafting and reviewing now.'}
           </p>
         </div>
         <Button onClick={() => navigate('settings')}>
@@ -448,7 +448,7 @@ export default function Overview() {
             <span />
             {connected.some((connection) => connection.provider === 'instagram')
               ? 'Only approved revisions with a publishing job are sent automatically'
-              : 'Content plan · connect Instagram to publish approved posts'}
+              : 'Content plan · connect an eligible account to deliver approved posts'}
           </div>
           <button
             className="upcoming-calendar"
