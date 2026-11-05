@@ -27,6 +27,8 @@ The scheduler checks for due watches every 15 minutes and processes up to two in
 
 The HTML collector reads notice titles and links. The RSS/Atom collector also retains a short excerpt and a supplied publication date. It does not read every PDF, total the seats in a medical-college spreadsheet, or verify a claim merely because a page was reachable. A PDF replaced at the same URL without changed page/feed metadata may not be detected.
 
+Standard gzip, deflate and Brotli responses are supported. Source documents must fit within 1 MiB both as downloaded and after decompression; smaller limits apply to supporting checks such as robots.txt. Oversized, incomplete or invalid compressed documents produce a visible error without replacing earlier results.
+
 Sites can change layout, require JavaScript, block automatic readers or disallow a path in `robots.txt`. The watch displays the error and preserves earlier results. It backs off failed automatic checks. Login walls, access challenges and crawling restrictions are not bypassed. Keep such sources in the manual review list or use a publisher-provided allowed feed. Wait at least one minute between manual retries.
 
 The catalog is a useful starting set, not coverage of every competitive examination or every state board. Add the exact official pages relevant to your audience and periodically review which ones still work.

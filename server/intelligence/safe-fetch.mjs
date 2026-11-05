@@ -1,6 +1,9 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { request as httpsRequest } from 'node:https';
+import { Transform, Writable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib';
 import { HttpError } from '../validation.mjs';
 
 export const READER_AGENT = 'StMarysIntelligence/1.0';
@@ -118,10 +121,19 @@ export function createSafeReader({ lookup = dnsLookup, request = httpsRequest } 
       let finished = false;
       let deadline;
       let req;
+      let incoming;
+      const controller = new AbortController();
       const finish = (error, value) => {
         if (finished) return;
         finished = true;
         clearTimeout(deadline);
+        if (error) {
+          // The same deadline covers receiving and decoding. Aborting the
+          // pipeline also destroys its decoder, including on expansion limits.
+          controller.abort();
+          incoming?.destroy();
+          req?.destroy();
+        }
         error ? reject(error) : resolveResult(value);
       };
       try {
@@ -139,7 +151,7 @@ export function createSafeReader({ lookup = dnsLookup, request = httpsRequest } 
               'User-Agent': READER_AGENT,
               Accept:
                 'text/html, application/atom+xml, application/rss+xml, application/xml, text/xml, text/plain;q=0.8',
-              'Accept-Encoding': 'identity',
+              'Accept-Encoding': 'gzip, deflate, br',
               Connection: 'close',
             },
             // Pin the checked address to the socket. A later DNS answer cannot
@@ -151,6 +163,11 @@ export function createSafeReader({ lookup = dnsLookup, request = httpsRequest } 
             },
           },
           (response) => {
+            incoming = response;
+            if (finished) {
+              response.destroy();
+              return;
+            }
             const headers = Object.fromEntries(
               Object.entries(response.headers).map(([name, value]) => [
                 name.toLowerCase(),
@@ -174,50 +191,78 @@ export function createSafeReader({ lookup = dnsLookup, request = httpsRequest } 
               response.destroy();
               return;
             }
-            if (headers['content-encoding'] && headers['content-encoding'] !== 'identity') {
+            const encoding = (headers['content-encoding'] || 'identity').trim().toLowerCase();
+            const decoders = {
+              gzip: createGunzip,
+              deflate: createInflate,
+              br: createBrotliDecompress,
+            };
+            // Stacked or unknown encodings are not guessed. Each supported
+            // document is decoded once, through independently bounded streams.
+            if (encoding !== 'identity' && !Object.hasOwn(decoders, encoding)) {
               finish(
                 new HttpError(
                   422,
-                  'The source did not provide an uncompressed document. Use its public feed or check it manually.',
+                  'The source uses an unsupported document encoding. Use its public feed or check it manually.',
                   'unsupported_encoding',
                 ),
               );
               response.destroy();
               return;
             }
-            let length = 0;
+            let encodedLength = 0;
+            let decodedLength = 0;
             const chunks = [];
-            response.on('data', (chunk) => {
-              length += chunk.length;
-              if (length > maxBytes) {
-                finish(
-                  new HttpError(
-                    422,
-                    'The source document exceeds the 1 MiB reading limit.',
-                    'source_too_large',
-                  ),
-                );
-                response.destroy();
-                return;
-              }
-              chunks.push(chunk);
+            const tooLarge = () =>
+              new HttpError(
+                422,
+                'The source document exceeds the reading limit (at most 1 MiB before or after decompression).',
+                'source_too_large',
+              );
+            const encodedLimit = new Transform({
+              transform(chunk, _encoding, callback) {
+                encodedLength += chunk.length;
+                if (encodedLength > maxBytes) callback(tooLarge());
+                else callback(null, chunk);
+              },
             });
-            response.on('end', () =>
-              finish(null, {
-                status,
-                headers,
-                text: Buffer.concat(chunks).toString('utf8'),
-                url: url.href,
-              }),
-            );
-            response.on('error', () =>
-              finish(
-                new HttpError(
-                  502,
-                  'The source closed the connection before its document was complete.',
-                  'source_read_failed',
+            const collected = new Writable({
+              write(chunk, _encoding, callback) {
+                decodedLength += chunk.length;
+                if (decodedLength > maxBytes) callback(tooLarge());
+                else {
+                  chunks.push(chunk);
+                  callback();
+                }
+              },
+            });
+            const decoder = encoding === 'identity' ? null : decoders[encoding]();
+            let decoderFailure;
+            decoder?.on('error', (error) => {
+              decoderFailure = error;
+            });
+            pipeline(response, encodedLimit, ...(decoder ? [decoder] : []), collected, {
+              signal: controller.signal,
+            }).then(
+              () =>
+                finish(null, {
+                  status,
+                  headers,
+                  text: Buffer.concat(chunks, decodedLength).toString('utf8'),
+                  url: url.href,
+                }),
+              (error) =>
+                finish(
+                  error instanceof HttpError
+                    ? error
+                    : new HttpError(
+                        502,
+                        decoderFailure === error
+                          ? 'The source returned an invalid or incomplete compressed document.'
+                          : 'The source closed the connection before its document was complete.',
+                        decoderFailure === error ? 'source_decode_failed' : 'source_read_failed',
+                      ),
                 ),
-              ),
             );
           },
         );

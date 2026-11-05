@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
+import { gzipSync, deflateSync, brotliCompressSync } from 'node:zlib';
 import {
+  MAX_DOCUMENT_BYTES,
   publicHttpsUrl,
   isPublicAddress,
   createSafeReader,
@@ -12,18 +14,26 @@ import {
 
 function transport(responses, calls) {
   return (url, options, callback) => {
-    calls.push({ url: url.href, options });
+    const call = { url: url.href, options };
+    calls.push(call);
     const request = new EventEmitter();
+    let response;
     request.end = () =>
       queueMicrotask(() => {
         const value = responses.shift();
         if (value instanceof Error) return request.emit('error', value);
-        const response = Readable.from([Buffer.from(value.text || '')]);
+        response =
+          value.stream ??
+          Readable.from(value.chunks ?? [value.bytes ?? Buffer.from(value.text || '')]);
+        call.response = response;
         response.statusCode = value.status ?? 200;
         response.headers = value.headers ?? { 'content-type': 'text/html' };
         callback(response);
       });
-    request.destroy = () => {};
+    request.destroy = () => {
+      call.destroyed = true;
+      response?.destroy();
+    };
     return request;
   };
 }
@@ -136,7 +146,7 @@ test('mixed public/private DNS answers and redirects to internal hosts are block
   assert.equal(calls.length, 1);
 });
 
-test('reader bounds received bytes, refuses compression, and sanitizes transport errors', async () => {
+test('reader bounds received bytes, refuses unknown/stacked encoding, and sanitizes transport errors', async () => {
   const make = (response) =>
     createSafeReader({
       lookup: async () => [{ address: '93.184.216.34', family: 4 }],
@@ -151,12 +161,178 @@ test('reader bounds received bytes, refuses compression, and sanitizes transport
     { code: 'source_too_large' },
   );
   await assert.rejects(
-    () => make({ headers: { 'content-encoding': 'gzip' }, text: 'data' })('https://example.org/'),
+    () =>
+      make({ headers: { 'content-encoding': 'compress' }, text: 'data' })('https://example.org/'),
+    { code: 'unsupported_encoding' },
+  );
+  await assert.rejects(
+    () =>
+      make({ headers: { 'content-encoding': 'gzip, br' }, text: 'data' })('https://example.org/'),
     { code: 'unsupported_encoding' },
   );
   await assert.rejects(
     () => make(new Error('secret-token-in-a-network-error'))('https://example.org/'),
     (error) => error.code === 'source_fetch_failed' && !error.message.includes('secret-token'),
+  );
+});
+
+const compressions = [
+  ['gzip', gzipSync],
+  ['deflate', deflateSync],
+  ['br', brotliCompressSync],
+];
+
+test('reader decodes chunked gzip, deflate and Brotli public documents within both byte limits', async () => {
+  const expected = '<html><a href="/notice.pdf">Official examination notice — ಕನ್ನಡ</a></html>';
+  for (const [encoding, compress] of compressions) {
+    const bytes = compress(Buffer.from(expected));
+    const calls = [];
+    const read = createSafeReader({
+      lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+      request: transport(
+        [
+          {
+            headers: {
+              'content-encoding': ` ${encoding.toUpperCase()} `,
+              'content-length': String(bytes.length),
+            },
+            chunks: [bytes.subarray(0, 4), bytes.subarray(4, 19), bytes.subarray(19)],
+          },
+        ],
+        calls,
+      ),
+    });
+    const result = await read('https://official.example.org/notices');
+    assert.equal(result.text, expected, encoding);
+    assert.equal(result.status, 200);
+    assert.equal(result.url, 'https://official.example.org/notices');
+    assert.equal(calls[0].options.headers['Accept-Encoding'], 'gzip, deflate, br');
+    assert.equal(calls[0].options.rejectUnauthorized, true);
+  }
+});
+
+test('each compression decoder rejects expansion past 1 MiB and destroys the request', async () => {
+  const expanded = Buffer.alloc(MAX_DOCUMENT_BYTES + 1, 'a');
+  for (const [encoding, compress] of compressions) {
+    const bytes = compress(expanded);
+    assert.ok(bytes.length < MAX_DOCUMENT_BYTES, 'Fixture must be small on the wire.');
+    const calls = [];
+    const read = createSafeReader({
+      lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+      request: transport([{ headers: { 'content-encoding': encoding }, bytes }], calls),
+    });
+    await assert.rejects(() => read('https://official.example.org/notices'), {
+      code: 'source_too_large',
+    });
+    assert.equal(calls[0].destroyed, true, encoding);
+    assert.equal(calls[0].response.destroyed, true, encoding);
+  }
+});
+
+test('compressed wire bytes are limited independently of decoded size and declared length', async () => {
+  // Concatenated valid empty gzip members expand to zero bytes but still consume
+  // the encoded budget. The deliberately false header must not bypass counting.
+  const bytes = Buffer.concat(Array.from({ length: 4 }, () => gzipSync(Buffer.alloc(0))));
+  const calls = [];
+  const read = createSafeReader({
+    lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    request: transport(
+      [
+        {
+          headers: { 'content-encoding': 'gzip', 'content-length': '1' },
+          chunks: [bytes.subarray(0, 40), bytes.subarray(40)],
+        },
+      ],
+      calls,
+    ),
+  });
+  await assert.rejects(() => read('https://official.example.org/notices', { maxBytes: 64 }), {
+    code: 'source_too_large',
+  });
+  assert.equal(calls[0].destroyed, true);
+});
+
+test('a decoded document exactly at its limit succeeds; truncated compression fails safely', async () => {
+  const expected = Buffer.alloc(1024, 'a');
+  for (const [encoding, compress] of compressions) {
+    const bytes = compress(expected);
+    const read = createSafeReader({
+      lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+      request: transport(
+        [
+          { headers: { 'content-encoding': encoding }, bytes },
+          {
+            headers: { 'content-encoding': encoding },
+            bytes: bytes.subarray(0, Math.floor(bytes.length / 2)),
+          },
+        ],
+        [],
+      ),
+    });
+    assert.equal(
+      (await read('https://official.example.org/notices', { maxBytes: 1024 })).text,
+      expected.toString(),
+    );
+    await assert.rejects(
+      () => read('https://official.example.org/notices'),
+      (error) => {
+        assert.equal(error.code, 'source_decode_failed');
+        assert.doesNotMatch(error.message, /Z_BUF_ERROR|Z_DATA_ERROR|BROTLI|stack/i);
+        return true;
+      },
+    );
+  }
+});
+
+test('the source deadline aborts a compressed stream that never finishes', async () => {
+  let sent = false;
+  const stream = new Readable({
+    read() {
+      if (!sent) {
+        sent = true;
+        this.push(gzipSync(Buffer.from('notice')));
+      }
+    },
+  });
+  const calls = [];
+  const read = createSafeReader({
+    lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    request: transport([{ headers: { 'content-encoding': 'gzip' }, stream }], calls),
+  });
+  // The real socket keeps the process alive; this fixture has no socket handle.
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    await assert.rejects(
+      () => read('https://official.example.org/notices', { totalTimeoutMs: 20 }),
+      { code: 'source_timeout' },
+    );
+    assert.equal(calls[0].destroyed, true);
+    assert.equal(stream.destroyed, true);
+  } finally {
+    clearInterval(keepAlive);
+  }
+});
+
+test('compressed robots rules still prevent requesting a disallowed source', async () => {
+  const calls = [];
+  const read = createSafeReader({
+    lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    request: transport(
+      [
+        {
+          headers: { 'content-encoding': 'br' },
+          bytes: brotliCompressSync(Buffer.from('User-agent: *\nDisallow: /blocked')),
+        },
+      ],
+      calls,
+    ),
+  });
+  await assert.rejects(() => createRobotsReader(read)('https://official.example.org/blocked'), {
+    code: 'robots_blocked',
+  });
+  assert.deepEqual(
+    calls.map((call) => call.url),
+    ['https://official.example.org/robots.txt'],
   );
 });
 
